@@ -617,10 +617,6 @@ Total: %2 · PIN %3</translation>
         <translation>Open file picker</translation>
     </message>
     <message>
-        <source>Attività</source>
-        <translation>Activity</translation>
-    </message>
-    <message>
         <source>Cambia dispositivo</source>
         <translation>Change device</translation>
     </message>
@@ -757,16 +753,20 @@ Total: %2 · PIN %3</translation>
         <translation>Send status</translation>
     </message>
     <message>
-        <source>Tocca un file ricevuto in Attività per aprire la sua cartella nel File Manager.</source>
-        <translation>Tap a received file in Activity to open its folder in File Manager.</translation>
-    </message>
-    <message>
         <source>Trasferimento in corso</source>
         <translation>Transfer in progress</translation>
     </message>
     <message>
         <source>Visibile sulla Wi-Fi come BBX Share</source>
         <translation>Visible on Wi-Fi as BBX Share</translation>
+    </message>
+    <message>
+        <source>activity_open_hint</source>
+        <translation>Tap a received file in Activity to open its folder in File Manager.</translation>
+    </message>
+    <message>
+        <source>activity_title</source>
+        <translation>Activity</translation>
     </message>
 </context>
 <context>

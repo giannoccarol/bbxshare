@@ -22,10 +22,9 @@
 
 using namespace bb::cascades;
 
-// Catena traduzioni: lingua supportata del device -> inglese. Per ogni lingua
-// non supportata (incluso l'italiano) si usa direttamente il catalogo inglese;
-// il testo sorgente italiano resta solo una protezione d'emergenza se un BAR è
-// stato installato senza cataloghi.
+// Catena traduzioni: catalogo inglese di base e catalogo della lingua del
+// device. Anche l'italiano passa dal catalogo runtime; solo lingue non
+// supportate ricadono sull'inglese.
 static QTranslator *g_baseTranslator = 0;
 static QTranslator *g_langTranslator = 0;
 
@@ -52,7 +51,7 @@ static void installTranslations()
     const QStringList supportedLanguages = QStringList()
         << QLatin1String("en") << QLatin1String("de")
         << QLatin1String("fr") << QLatin1String("es")
-        << QLatin1String("nl");
+        << QLatin1String("nl") << QLatin1String("it");
     if (lang.isEmpty() || lang.size() > 3 ||
         !supportedLanguages.contains(lang))
         lang = QLatin1String("en");
@@ -74,7 +73,7 @@ static void installTranslations()
     // una volta verificata la selezione lingua.
     const QString selfQml = QCoreApplication::translate("main", "Receive");
     const QString selfCpp = QObject::tr("Send completed");
-    const QString selfBar = QCoreApplication::translate("main", "Attività");
+    const QString selfBar = QCoreApplication::translate("main", "activity_title");
     QDir().mkpath(QLatin1String("/accounts/1000/shared/downloads/BBXShare"));
     QFile diag(QLatin1String("/accounts/1000/shared/downloads/BBXShare/i18n.log"));
     if (diag.open(QIODevice::Append | QIODevice::Text)) {
@@ -114,8 +113,8 @@ Q_DECL_EXPORT int main(int argc, char **argv)
     Application app(argc, argv);
     app.themeSupport()->setVisualStyle(VisualStyle::Dark);
 
-    // In Qt4 le sorgenti tr() sono Latin-1 di default: senza questo, ogni
-    // stringa con accenti (Attività, ·, —) non matcha le chiavi nei .qm.
+    // I sorgenti tr() sono UTF-8; le etichette con caratteri non ASCII usano
+    // chiavi ASCII nei cataloghi per evitare mismatch del parser Qt4/BB10.
     QTextCodec::setCodecForTr(QTextCodec::codecForName("UTF-8"));
     QTextCodec::setCodecForCStrings(QTextCodec::codecForName("UTF-8"));
 

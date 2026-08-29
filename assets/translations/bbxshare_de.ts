@@ -617,10 +617,6 @@ Gesamt: %2 · PIN %3</translation>
         <translation>Dateiauswahl öffnen</translation>
     </message>
     <message>
-        <source>Attività</source>
-        <translation>Aktivität</translation>
-    </message>
-    <message>
         <source>Cambia dispositivo</source>
         <translation>Gerät wechseln</translation>
     </message>
@@ -757,16 +753,20 @@ Gesamt: %2 · PIN %3</translation>
         <translation>Sendestatus</translation>
     </message>
     <message>
-        <source>Tocca un file ricevuto in Attività per aprire la sua cartella nel File Manager.</source>
-        <translation>Tippe eine empfangene Datei in Aktivität an, um den Ordner im Dateimanager zu öffnen.</translation>
-    </message>
-    <message>
         <source>Trasferimento in corso</source>
         <translation>Übertragung läuft</translation>
     </message>
     <message>
         <source>Visibile sulla Wi-Fi come BBX Share</source>
         <translation>Sichtbar im WLAN als BBX Share</translation>
+    </message>
+    <message>
+        <source>activity_open_hint</source>
+        <translation>Tippe eine empfangene Datei in Aktivität an, um den Ordner im Dateimanager zu öffnen.</translation>
+    </message>
+    <message>
+        <source>activity_title</source>
+        <translation>Aktivität</translation>
     </message>
 </context>
 <context>

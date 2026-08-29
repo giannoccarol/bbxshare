@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-# Genera assets/translations/bbxshare_{en,de,fr,es,nl}.ts a partire dalle
+# Genera assets/translations/bbxshare_{en,de,fr,es,nl,it}.ts a partire dalle
 # sorgenti tr()/qsTr(). Lingua base: italiano (sourcelanguage).
 import re, sys, os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT)
 
-# key -> [en, de, fr, es, nl]
+# key -> [en, de, fr, es, nl].  Le chiavi aggiunte possono avere anche una
+# sesta voce italiana esplicita; per le stringhe sorgente italiane esistenti
+# l'italiano viene comunque generato dinamicamente come identità.
 T = {
  "%1 KB · pronto per l'invio": ["%1 KB · ready to send", "%1 KB · bereit zum Senden", "%1 KB · prêt à envoyer", "%1 KB · listo para enviar", "%1 KB · klaar om te verzenden"],
  "%1 MB · pronto per l'invio": ["%1 MB · ready to send", "%1 MB · bereit zum Senden", "%1 MB · prêt à envoyer", "%1 MB · listo para enviar", "%1 MB · klaar om te verzenden"],
@@ -21,6 +23,8 @@ T = {
  "Attendo conferma ricezione da %1…": ["Waiting for reception confirmation from %1…", "Warte auf Empfangsbestätigung von %1…", "Attente de la confirmation de réception de %1…", "Esperando confirmación de recepción de %1…", "Wachten op ontvangstbevestiging van %1…"],
  "Attenzione: join multicast fallita: %1": ["Warning: multicast join failed: %1", "Warnung: Multicast-Beitritt fehlgeschlagen: %1", "Attention : échec de l'adhésion multicast : %1", "Atención: falló la unión multicast: %1", "Waarschuwing: multicast-deelname mislukt: %1"],
  "Attività": ["Activity", "Aktivität", "Activité", "Actividad", "Activiteit"],
+ "activity_title": ["Activity", "Aktivität", "Activité", "Actividad", "Activiteit", "Attività"],
+ "activity_open_hint": ["Tap a received file in Activity to open its folder in File Manager.", "Tippe eine empfangene Datei in Aktivität an, um den Ordner im Dateimanager zu öffnen.", "Touchez un fichier reçu dans Activité pour ouvrir son dossier dans le Gestionnaire de fichiers.", "Toca un archivo recibido en Actividad para abrir su carpeta en el Gestor de archivos.", "Tik op een ontvangen bestand in Activiteit om de map in Bestandsbeheer te openen.", "Tocca un file ricevuto in Attività per aprire la sua cartella nel File Manager."],
  "Attivo — visibile come \"%1\" — IP %2, TCP %3": ["Active — visible as \"%1\" — IP %2, TCP %3", "Aktiv — sichtbar als \"%1\" — IP %2, TCP %3", "Actif — visible comme \"%1\" — IP %2, TCP %3", "Activo — visible como \"%1\" — IP %2, TCP %3", "Actief — zichtbaar als \"%1\" — IP %2, TCP %3"],
  "Avvio del servizio...": ["Starting service...", "Dienst wird gestartet...", "Démarrage du service...", "Iniciando el servicio...", "Service starten..."],
  "Avvio invio fallito": ["Failed to start send", "Senden konnte nicht gestartet werden", "Échec du démarrage de l'envoi", "No se pudo iniciar el envío", "Starten van verzending mislukt"],
@@ -209,8 +213,8 @@ T = {
  "Errore UI BBX Share": ["BBX Share UI error", "BBX Share UI-Fehler", "Erreur UI BBX Share", "Error de UI de BBX Share", "BBX Share UI-fout"],
 }
 
-LANGS = ["en", "de", "fr", "es", "nl"]
-LANG_ATTR = {"en":"en", "de":"de", "fr":"fr", "es":"es", "nl":"nl"}
+LANGS = ["en", "de", "fr", "es", "nl", "it"]
+LANG_ATTR = {"en":"en", "de":"de", "fr":"fr", "es":"es", "nl":"nl", "it":"it"}
 
 def scan_cpp():
     keys = set()
@@ -251,7 +255,14 @@ def write_ts(path, lang, contexts):
             lines.append('    <message>')
             lines.append('        <source>%s</source>' % xml_escape(k))
             if t:
-                lines.append('        <translation>%s</translation>' % xml_escape(t[LANGS.index(lang)]))
+                # La maggior parte delle sorgenti è italiana e mantiene la
+                # stessa forma nel catalogo it; le nuove chiavi ASCII possono
+                # invece fornire una traduzione italiana esplicita.
+                if lang == "it":
+                    value = t[5] if len(t) > 5 else k
+                else:
+                    value = t[LANGS.index(lang)]
+                lines.append('        <translation>%s</translation>' % xml_escape(value))
             else:
                 lines.append('        <translation type="unfinished"></translation>')
             lines.append('    </message>')

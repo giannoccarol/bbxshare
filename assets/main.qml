@@ -16,7 +16,7 @@ Page {
 
     actions: [
         ActionItem {
-            title: qsTr("Attivit\u00e0")
+            title: qsTr("activity_title")
             imageSource: "asset:///images/nav_activity.png"
             ActionBar.placement: ActionBarPlacement.OnBar
             onTriggered: appPage.currentSection = "activity"
@@ -49,7 +49,7 @@ Page {
             verticalAlignment: VerticalAlignment.Fill
             layout: StackLayout { orientation: LayoutOrientation.TopToBottom }
 
-            Header { title: qsTr("Attivit\u00e0") }
+            Header { title: qsTr("activity_title") }
 
             Container {
                 visible: share.transferActive
@@ -244,7 +244,7 @@ Page {
                         textStyle.color: Color.LightGray
                     }
                     Label {
-                        text: qsTr("Tocca un file ricevuto in Attivit\u00e0 per aprire la sua cartella nel File Manager.")
+                        text: qsTr("activity_open_hint")
                         multiline: true
                         textStyle.base: SystemDefaults.TextStyles.SmallText
                         textStyle.color: Color.LightGray

@@ -123,9 +123,9 @@ does not expose the custom service-data advertisement required to reproduce the
 complete Android BLE-first visibility path, so Wi-Fi must remain connected on
 both devices.
 
-The UI uses the device language when an English, German, French, Spanish, or
-Dutch catalog is available. Unsupported locales, including Italian, fall back
-to English.
+The UI selects a runtime catalog for English, Italian, German, French, Spanish,
+or Dutch. Other unsupported locales fall back to English; Italian is a normal
+dynamic catalog, not a hardcoded source-language fallback.
 
 ## Repository contents
 

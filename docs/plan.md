@@ -98,8 +98,8 @@ Vincolo BB10: l'API pubblica può scansionare gli advertisement BLE ma non impos
    - guida contestuale, stato ricezione compatto, progress bar e card di consenso;
    - stringhe C++ decodificate esplicitamente come UTF-8 e accenti QML espressi
      con escape Unicode per evitare mojibake sulla toolchain legacy.
-   - fallback lingua esplicito su inglese per ogni locale non supportato;
-     l'italiano non viene più selezionato come fallback implicito.
+   - cataloghi runtime completi per inglese, italiano, tedesco, francese,
+     spagnolo e olandese; le sole lingue non supportate ricadono sull'inglese.
 
 ## Workflow
 

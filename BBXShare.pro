@@ -22,7 +22,8 @@ TRANSLATIONS += \
     assets/translations/bbxshare_de.ts \
     assets/translations/bbxshare_fr.ts \
     assets/translations/bbxshare_es.ts \
-    assets/translations/bbxshare_nl.ts
+    assets/translations/bbxshare_nl.ts \
+    assets/translations/bbxshare_it.ts
 
 RESOURCES += assets/translations.qrc
 
