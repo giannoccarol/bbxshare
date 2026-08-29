@@ -69,7 +69,8 @@ QuickShareSender::QuickShareSender(const QString &path, const QString &address,
                                    ShareService *service)
     : m_fd(-1), m_path(path), m_address(address), m_port(port),
       m_deviceName(deviceName), m_service(service), m_sendSequence(0),
-      m_receiveSequence(0), m_fileSize(0), m_sentBytes(0), m_payloadId(0), m_ecKey(0)
+      m_receiveSequence(0), m_fileSize(0), m_sentBytes(0), m_payloadId(0),
+      m_safeDisconnect(false), m_ecKey(0)
 {
 }
 
@@ -422,6 +423,9 @@ bool QuickShareSender::sendConnectionResponse()
 {
     QByteArray response;
     ProtoWire::appendVarint(&response, 3, 1);
+    // Advertise support for the safe-disconnect handshake used by recent
+    // Android/Samsung Quick Share receivers.
+    ProtoWire::appendVarint(&response, 7, 1);
     QByteArray osInfo;
     ProtoWire::appendVarint(&osInfo, 1, 100); // LINUX/QNX neutro
     ProtoWire::appendBytes(&response, 4, osInfo);
@@ -440,6 +444,9 @@ bool QuickShareSender::processConnectionResponse(const QByteArray &frame)
 
     const bool hasDecision = nestedVarint(response, 3, &decision);
     const bool hasLegacyStatus = nestedVarint(response, 1, &legacyStatus);
+    quint64 safeDisconnectVersion = 0;
+    m_safeDisconnect = nestedVarint(response, 7, &safeDisconnectVersion) &&
+                       safeDisconnectVersion >= 1;
     if ((!hasDecision && !hasLegacyStatus) ||
         (hasDecision ? decision != 1 : legacyStatus != 0))
         return fail(QString::fromUtf8("connessione rifiutata dal receiver"));
@@ -715,6 +722,9 @@ bool QuickShareSender::sendFile()
         return false;
     if (!sendDisconnection())
         return fail(QString::fromUtf8("chiusura del trasferimento fallita"));
+    status(QString::fromUtf8("Attendo conferma ricezione da %1…").arg(m_deviceName));
+    if (!waitForSafeDisconnect())
+        return fail(QString::fromUtf8("conferma ricezione non valida"));
     status(QString::fromUtf8("Invio completato a %1").arg(m_deviceName));
     event(QString::fromUtf8("File inviato"), QFileInfo(m_path).fileName());
     QMetaObject::invokeMethod(m_service, "clearTransferProgress", Qt::QueuedConnection);
@@ -723,7 +733,41 @@ bool QuickShareSender::sendFile()
 
 bool QuickShareSender::sendDisconnection()
 {
-    return sendEncryptedOffline(makeOfflineFrame(6, 7, QByteArray()));
+    QByteArray disconnection;
+    if (m_safeDisconnect)
+        ProtoWire::appendVarint(&disconnection, 1, 1); // request_safe_to_disconnect
+    return sendEncryptedOffline(makeOfflineFrame(6, 7, disconnection));
+}
+
+bool QuickShareSender::waitForSafeDisconnect()
+{
+    if (!m_safeDisconnect)
+        return true;
+
+    // The peer may either acknowledge the request or simply close the TCP
+    // stream (older Quick Share builds). EOF is therefore a successful drain,
+    // while a malformed encrypted frame remains a real protocol failure.
+    QTime timer;
+    timer.start();
+    while (timer.elapsed() < 1500) {
+        QByteArray secure, offline, v1, disconnection;
+        if (!readFrame(&secure, 1500 - timer.elapsed()))
+            return true;
+        if (!decryptOffline(secure, &offline) ||
+            !nestedBytes(offline, 2, &v1))
+            return false;
+        quint64 type = 0;
+        if (!nestedVarint(v1, 1, &type))
+            return false;
+        if (type != 6)
+            continue;
+        if (!nestedBytes(v1, 7, &disconnection))
+            return true;
+        quint64 ack = 0;
+        if (nestedVarint(disconnection, 2, &ack) && ack == 1)
+            return true;
+    }
+    return true;
 }
 
 bool QuickShareSender::run()

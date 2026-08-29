@@ -41,6 +41,9 @@ As of 2026-08-29:
 - the sender includes the Quick Share `NEARBY_SHARE` use case, a non-zero
   attachment id, and image/video/audio/app classification for strict Android
   receivers;
+- the sender negotiates and drains the safe-disconnect handshake when the peer
+  advertises it, avoiding false success caused by closing TCP before Android
+  finishes committing the received file;
 - mDNS discovery and advertisement for the Nearby Share Wi-Fi LAN service are
   implemented;
 - Android Quick Share BLE advertisements are observed on BB10 and trigger an
