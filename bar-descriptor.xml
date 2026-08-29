@@ -13,6 +13,13 @@
         <systemChrome>none</systemChrome>
     </initialWindow>
 
+    <icon>
+        <image>bbxshare-icon-90.png</image>
+        <image>bbxshare-icon-96.png</image>
+        <image>bbxshare-icon-110.png</image>
+        <image>bbxshare-icon-144.png</image>
+    </icon>
+
     <configuration name="Device-Debug">
         <platformArchitecture>armle-v7</platformArchitecture>
         <asset path="arm/o.le-v7-g/BBXShare" entry="true" type="Qnx/Elf">BBXShare</asset>
@@ -25,6 +32,10 @@
     </configuration>
 
     <asset path="assets">assets</asset>
+    <asset path="assets/images/bbxshare-icon-90.png">bbxshare-icon-90.png</asset>
+    <asset path="assets/images/bbxshare-icon-96.png">bbxshare-icon-96.png</asset>
+    <asset path="assets/images/bbxshare-icon-110.png">bbxshare-icon-110.png</asset>
+    <asset path="assets/images/bbxshare-icon-144.png">bbxshare-icon-144.png</asset>
 
     <!-- Mostra BBX Share tra le destinazioni del menu Condividi BB10. -->
     <invoke-target id="dev.bbos10.BBXShare.share">
