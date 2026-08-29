@@ -4,20 +4,6 @@
 <context>
     <name>QObject</name>
     <message>
-        <source>%1
-Totale: %2 · PIN %3</source>
-        <translation>%1
-Total: %2 · PIN %3</translation>
-    </message>
-    <message>
-        <source>%1 KB · pronto per l'invio</source>
-        <translation>%1 KB · ready to send</translation>
-    </message>
-    <message>
-        <source>%1 MB · pronto per l'invio</source>
-        <translation>%1 MB · ready to send</translation>
-    </message>
-    <message>
         <source>%1 di %2</source>
         <translation>%1 of %2</translation>
     </message>
@@ -30,24 +16,8 @@ Total: %2 · PIN %3</translation>
         <translation>%1 wants to share %2 item(s)</translation>
     </message>
     <message>
-        <source>Attendi la conferma su %1 — verifica PIN %2</source>
-        <translation>Wait for confirmation on %1 — verify PIN %2</translation>
-    </message>
-    <message>
-        <source>Attendo conferma ricezione da %1…</source>
-        <translation>Waiting for reception confirmation from %1…</translation>
-    </message>
-    <message>
-        <source>Attenzione: impossibile verificare l'unicità del nome mDNS</source>
-        <translation>Warning: unable to verify mDNS name uniqueness</translation>
-    </message>
-    <message>
         <source>Attenzione: join multicast fallita: %1</source>
         <translation>Warning: multicast join failed: %1</translation>
-    </message>
-    <message>
-        <source>Attivo — visibile come "%1" — IP %2, TCP %3</source>
-        <translation>Active — visible as "%1" — IP %2, TCP %3</translation>
     </message>
     <message>
         <source>Avvio del servizio...</source>
@@ -66,10 +36,6 @@ Total: %2 · PIN %3</translation>
         <translation>mDNS bind failed: %1</translation>
     </message>
     <message>
-        <source>Conferma il trasferimento da %1 — PIN %2</source>
-        <translation>Confirm the transfer from %1 — PIN %2</translation>
-    </message>
-    <message>
         <source>ConnectionRequest protobuf non valido</source>
         <translation>Invalid ConnectionRequest protobuf</translation>
     </message>
@@ -84,18 +50,6 @@ Total: %2 · PIN %3</translation>
     <message>
         <source>Connessione a %1</source>
         <translation>Connecting to %1</translation>
-    </message>
-    <message>
-        <source>Connessione al dispositivo…</source>
-        <translation>Connecting to device…</translation>
-    </message>
-    <message>
-        <source>Connessione da %1 (%2) — negoziazione sicura</source>
-        <translation>Connection from %1 (%2) — secure negotiation</translation>
-    </message>
-    <message>
-        <source>Connessione…</source>
-        <translation>Connecting…</translation>
     </message>
     <message>
         <source>ECDH fallito</source>
@@ -122,10 +76,6 @@ Total: %2 · PIN %3</translation>
         <translation>Local IP updated: %1</translation>
     </message>
     <message>
-        <source>Il dispositivo non è più disponibile: esegui una nuova ricerca</source>
-        <translation>The device is no longer available: search again</translation>
-    </message>
-    <message>
         <source>Impossibile avviare il servizio di rete</source>
         <translation>Cannot start the network service</translation>
     </message>
@@ -140,10 +90,6 @@ Total: %2 · PIN %3</translation>
     <message>
         <source>Introduction mancante</source>
         <translation>Missing Introduction</translation>
-    </message>
-    <message>
-        <source>Inviato a %1 · %2</source>
-        <translation>Sent to %1 · %2</translation>
     </message>
     <message>
         <source>Invio completato</source>
@@ -186,24 +132,8 @@ Total: %2 · PIN %3</translation>
         <translation>Invalid PayloadTransfer</translation>
     </message>
     <message>
-        <source>Ricerca dispositivi vicini…</source>
-        <translation>Searching for nearby devices…</translation>
-    </message>
-    <message>
         <source>Ricerca terminata</source>
         <translation>Search finished</translation>
-    </message>
-    <message>
-        <source>Ricevuto da %1 · %2</source>
-        <translation>Received from %1 · %2</translation>
-    </message>
-    <message>
-        <source>Ricezione %1 — %2 / %3</source>
-        <translation>Receiving %1 — %2 / %3</translation>
-    </message>
-    <message>
-        <source>Richiesta di invio a %1 — PIN %2 — attendo conferma</source>
-        <translation>Send request to %1 — PIN %2 — waiting for confirmation</translation>
     </message>
     <message>
         <source>SecureMessage server non valido</source>
@@ -338,6 +268,18 @@ Total: %2 · PIN %3</translation>
         <translation>endpoint info too short</translation>
     </message>
     <message>
+        <source>error_device_unavailable</source>
+        <translation>The device is no longer available: search again</translation>
+    </message>
+    <message>
+        <source>error_transfer_already_pending</source>
+        <translation>another transfer is already pending</translation>
+    </message>
+    <message>
+        <source>error_transfer_inactivity</source>
+        <translation>transfer stopped due to inactivity</translation>
+    </message>
+    <message>
         <source>file di destinazione non aperto: %1</source>
         <translation>destination file not open: %1</translation>
     </message>
@@ -372,6 +314,14 @@ Total: %2 · PIN %3</translation>
     <message>
         <source>generazione chiave P-256 fallita</source>
         <translation>P-256 key generation failed</translation>
+    </message>
+    <message>
+        <source>history_received_from</source>
+        <translation>Received from %1 · %2</translation>
+    </message>
+    <message>
+        <source>history_sent_to</source>
+        <translation>Sent to %1 · %2</translation>
     </message>
     <message>
         <source>identificatore o dimensione file non validi</source>
@@ -562,12 +512,60 @@ Total: %2 · PIN %3</translation>
         <translation>invalid server SecureMessage sequence</translation>
     </message>
     <message>
+        <source>size_kb_ready</source>
+        <translation>%1 KB · ready to send</translation>
+    </message>
+    <message>
+        <source>size_mb_ready</source>
+        <translation>%1 MB · ready to send</translation>
+    </message>
+    <message>
         <source>socket TCP: %1</source>
         <translation>TCP socket: %1</translation>
     </message>
     <message>
         <source>spazio insufficiente: servono almeno %1</source>
         <translation>insufficient space: at least %1 required</translation>
+    </message>
+    <message>
+        <source>status_active_endpoint</source>
+        <translation>Active — visible as "%1" — IP %2, TCP %3</translation>
+    </message>
+    <message>
+        <source>status_confirm_transfer</source>
+        <translation>Confirm the transfer from %1 — PIN %2</translation>
+    </message>
+    <message>
+        <source>status_connecting</source>
+        <translation>Connecting…</translation>
+    </message>
+    <message>
+        <source>status_connecting_device</source>
+        <translation>Connecting to device…</translation>
+    </message>
+    <message>
+        <source>status_connection_from_secure</source>
+        <translation>Connection from %1 (%2) — secure negotiation</translation>
+    </message>
+    <message>
+        <source>status_receiving_progress</source>
+        <translation>Receiving %1 — %2 / %3</translation>
+    </message>
+    <message>
+        <source>status_search_nearby</source>
+        <translation>Searching for nearby devices…</translation>
+    </message>
+    <message>
+        <source>status_send_request_waiting</source>
+        <translation>Send request to %1 — PIN %2 — waiting for confirmation</translation>
+    </message>
+    <message>
+        <source>status_wait_confirmation_pin</source>
+        <translation>Wait for confirmation on %1 — verify PIN %2</translation>
+    </message>
+    <message>
+        <source>status_waiting_receive_confirmation</source>
+        <translation>Waiting for reception confirmation from %1…</translation>
     </message>
     <message>
         <source>timeout connessione al device</source>
@@ -582,6 +580,11 @@ Total: %2 · PIN %3</translation>
         <translation>unsupported payload type: %1</translation>
     </message>
     <message>
+        <source>transfer_total_pin</source>
+        <translation>%1
+Total: %2 · PIN %3</translation>
+    </message>
+    <message>
         <source>trasferimento annullato dal receiver</source>
         <translation>transfer cancelled by receiver</translation>
     </message>
@@ -590,12 +593,8 @@ Total: %2 · PIN %3</translation>
         <translation>transfer cancelled by the phone</translation>
     </message>
     <message>
-        <source>trasferimento interrotto per inattività</source>
-        <translation>transfer stopped due to inactivity</translation>
-    </message>
-    <message>
-        <source>un altro trasferimento è già in attesa</source>
-        <translation>another transfer is already pending</translation>
+        <source>warning_mdns_name_uniqueness</source>
+        <translation>Warning: unable to verify mDNS name uniqueness</translation>
     </message>
 </context>
 <context>
@@ -673,10 +672,6 @@ Total: %2 · PIN %3</translation>
         <translation>Sending</translation>
     </message>
     <message>
-        <source>Invio in corso…</source>
-        <translation>Sending…</translation>
-    </message>
-    <message>
         <source>Invio non riuscito</source>
         <translation>Send failed</translation>
     </message>
@@ -701,16 +696,8 @@ Total: %2 · PIN %3</translation>
         <translation>Clear</translation>
     </message>
     <message>
-        <source>Quick Share · %1</source>
-        <translation>Quick Share · %1</translation>
-    </message>
-    <message>
         <source>RICHIESTA QUICK SHARE</source>
         <translation>QUICK SHARE REQUEST</translation>
-    </message>
-    <message>
-        <source>Ricerca in corso…</source>
-        <translation>Searching…</translation>
     </message>
     <message>
         <source>Ricevi</source>
@@ -745,10 +732,6 @@ Total: %2 · PIN %3</translation>
         <translation>Choose a file</translation>
     </message>
     <message>
-        <source>Scegli uno o più file da inviare</source>
-        <translation>Choose one or more files to send</translation>
-    </message>
-    <message>
         <source>Stato invio</source>
         <translation>Send status</translation>
     </message>
@@ -767,6 +750,22 @@ Total: %2 · PIN %3</translation>
     <message>
         <source>activity_title</source>
         <translation>Activity</translation>
+    </message>
+    <message>
+        <source>ui_choose_multiple_files</source>
+        <translation>Choose one or more files to send</translation>
+    </message>
+    <message>
+        <source>ui_quick_share_address</source>
+        <translation>Quick Share · %1</translation>
+    </message>
+    <message>
+        <source>ui_search_progress</source>
+        <translation>Searching…</translation>
+    </message>
+    <message>
+        <source>ui_sending_progress</source>
+        <translation>Sending…</translation>
     </message>
 </context>
 <context>

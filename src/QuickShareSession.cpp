@@ -303,7 +303,7 @@ bool QuickShareSession::processConnectionRequest(const QByteArray &frame)
     if (endpoint.size() < 18 + nameLength)
         return fail(QObject::tr("nome endpoint troncato"));
     m_peerName = QString::fromUtf8(endpoint.constData() + 18, nameLength);
-    status(QObject::tr("Connessione da %1 (%2) — negoziazione sicura")
+    status(QObject::tr("status_connection_from_secure")
                .arg(m_peerName, m_peerAddress));
     return true;
 }
@@ -767,13 +767,13 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
 
     const QString title = QObject::tr("%1 vuole condividere %2 elemento/i")
         .arg(m_peerName).arg(m_files.size());
-    const QString detail = QObject::tr("%1\nTotale: %2 · PIN %3")
+    const QString detail = QObject::tr("transfer_total_pin")
         .arg(names.join(QString::fromUtf8(", "))).arg(humanSize(total)).arg(m_pin);
     if (!m_service->beginConsent(title, detail))
-        return fail(QObject::tr("un altro trasferimento è già in attesa"));
+        return fail(QObject::tr("error_transfer_already_pending"));
     m_state = AwaitConsent;
     m_consentTimer.start();
-    status(QObject::tr("Conferma il trasferimento da %1 — PIN %2")
+    status(QObject::tr("status_confirm_transfer")
                .arg(m_peerName, m_pin));
     return true;
 }
@@ -826,7 +826,7 @@ bool QuickShareSession::processIncomingFile(qint64 id, qint64 offset, int flags,
         return fail(QObject::tr("scrittura fallita: %1").arg(file->path));
     file->received += body.size();
     m_receivedBytes += body.size();
-    status(QObject::tr("Ricezione %1 — %2 / %3")
+    status(QObject::tr("status_receiving_progress")
                .arg(file->name, humanSize(file->received), humanSize(file->size)));
     const float progress = m_totalBytes > 0
         ? (float)((double)m_receivedBytes / (double)m_totalBytes) : 0.0f;
@@ -842,7 +842,7 @@ bool QuickShareSession::processIncomingFile(qint64 id, qint64 offset, int flags,
             return fail(QObject::tr("file incompleto: %1").arg(file->name));
         QMetaObject::invokeMethod(m_service, "appendEvent", Qt::QueuedConnection,
                                   Q_ARG(QString, file->name),
-                                  Q_ARG(QString, QObject::tr("Ricevuto da %1 · %2")
+                                  Q_ARG(QString, QObject::tr("history_received_from")
                                       .arg(m_peerName, humanSize(file->size))),
                                   Q_ARG(QString, file->path));
         delete file->file;
@@ -1004,7 +1004,7 @@ bool QuickShareSession::run()
         if (ready == 0) {
             if (m_state == Receiving &&
                 m_activityTimer.elapsed() > RECEIVE_INACTIVITY_TIMEOUT_MS)
-                return fail(QObject::tr("trasferimento interrotto per inattività"));
+                return fail(QObject::tr("error_transfer_inactivity"));
             continue;
         }
         if (!(pfd.revents & POLLIN))

@@ -356,7 +356,7 @@ Page {
                     }
                     Button {
                         visible: share.outgoingReady
-                        text: share.scanning ? qsTr("Ricerca in corso…") : qsTr("Cerca dispositivi")
+                        text: share.scanning ? qsTr("ui_search_progress") : qsTr("Cerca dispositivi")
                         enabled: !share.scanning && !share.sendActive
                         horizontalAlignment: HorizontalAlignment.Fill
                         onClicked: share.scanDevices()
@@ -402,7 +402,7 @@ Page {
                                             layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                                             Label { text: ListItemData.name; textStyle.fontWeight: FontWeight.Bold }
                                             Label {
-                                                text: qsTr("Quick Share · %1").arg(ListItemData.address)
+                                                text: qsTr("ui_quick_share_address").arg(ListItemData.address)
                                                 textStyle.base: SystemDefaults.TextStyles.SmallText
                                                 textStyle.color: Color.LightGray
                                             }
@@ -440,7 +440,7 @@ Page {
                             textStyle.color: Color.LightGray
                         }
                         Button {
-                            text: share.sendActive ? qsTr("Invio in corso…") :
+                            text: share.sendActive ? qsTr("ui_sending_progress") :
                                   (share.outgoingReady ? qsTr("Invia %1").arg(share.outgoingName) : qsTr("Scegli prima un file"))
                             enabled: share.outgoingReady && !share.transferActive && !share.sendActive
                             horizontalAlignment: HorizontalAlignment.Fill
@@ -492,7 +492,7 @@ Page {
     attachedObjects: [
         FilePicker {
             id: outgoingPicker
-            title: qsTr("Scegli uno o più file da inviare")
+            title: qsTr("ui_choose_multiple_files")
             mode: FilePickerMode.PickerMultiple
             viewMode: FilePickerViewMode.ListView
             filter: ["*"]

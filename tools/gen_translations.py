@@ -214,6 +214,35 @@ T = {
  "Errore UI BBX Share": ["BBX Share UI error", "BBX Share UI-Fehler", "Erreur UI BBX Share", "Error de UI de BBX Share", "BBX Share UI-fout"],
 }
 
+# Qt4/BB10 can mis-match QObject::tr() source strings containing UTF-8
+# punctuation/accents. Keep those source identifiers ASCII while retaining
+# the existing translations through this alias table.
+ALIASES = {
+ "transfer_total_pin": "%1\nTotale: %2 · PIN %3",
+ "status_connection_from_secure": "Connessione da %1 (%2) — negoziazione sicura",
+ "error_transfer_already_pending": "un altro trasferimento è già in attesa",
+ "status_confirm_transfer": "Conferma il trasferimento da %1 — PIN %2",
+ "status_receiving_progress": "Ricezione %1 — %2 / %3",
+ "history_received_from": "Ricevuto da %1 · %2",
+ "error_transfer_inactivity": "trasferimento interrotto per inattività",
+ "status_send_request_waiting": "Richiesta di invio a %1 — PIN %2 — attendo conferma",
+ "status_waiting_receive_confirmation": "Attendo conferma ricezione da %1…",
+ "history_sent_to": "Inviato a %1 · %2",
+ "status_wait_confirmation_pin": "Attendi la conferma su %1 — verifica PIN %2",
+ "warning_mdns_name_uniqueness": "Attenzione: impossibile verificare l'unicità del nome mDNS",
+ "status_active_endpoint": "Attivo — visibile come \"%1\" — IP %2, TCP %3",
+ "size_mb_ready": "%1 MB · pronto per l'invio",
+ "size_kb_ready": "%1 KB · pronto per l'invio",
+ "status_search_nearby": "Ricerca dispositivi vicini…",
+ "error_device_unavailable": "Il dispositivo non è più disponibile: esegui una nuova ricerca",
+ "status_connecting_device": "Connessione al dispositivo…",
+ "status_connecting": "Connessione…",
+ "ui_sending_progress": "Invio in corso…",
+ "ui_search_progress": "Ricerca in corso…",
+ "ui_quick_share_address": "Quick Share · %1",
+ "ui_choose_multiple_files": "Scegli uno o più file da inviare",
+}
+
 LANGS = ["en", "de", "fr", "es", "nl", "it"]
 LANG_ATTR = {"en":"en", "de":"de", "fr":"fr", "es":"es", "nl":"nl", "it":"it"}
 
@@ -253,6 +282,8 @@ def write_ts(path, lang, contexts):
         lines.append('    <name>%s</name>' % name)
         for k in sorted(keys):
             t = T.get(k)
+            if not t and k in ALIASES:
+                t = T.get(ALIASES[k])
             lines.append('    <message>')
             lines.append('        <source>%s</source>' % xml_escape(k))
             if t:
@@ -260,7 +291,7 @@ def write_ts(path, lang, contexts):
                 # stessa forma nel catalogo it; le nuove chiavi ASCII possono
                 # invece fornire una traduzione italiana esplicita.
                 if lang == "it":
-                    value = t[5] if len(t) > 5 else k
+                    value = t[5] if len(t) > 5 else ALIASES.get(k, k)
                 else:
                     value = t[LANGS.index(lang)]
                 lines.append('        <translation>%s</translation>' % xml_escape(value))
@@ -275,7 +306,7 @@ cpp_keys = scan_cpp()
 qml_ctx = scan_qml()
 missing = []
 for k in sorted(cpp_keys | set().union(*qml_ctx.values())):
-    if k not in T:
+    if k not in T and k not in ALIASES:
         missing.append(k)
 
 contexts = [("QObject", cpp_keys)] + list(qml_ctx.items())

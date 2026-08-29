@@ -736,7 +736,7 @@ bool QuickShareSender::sendIntroduction()
     QByteArray frame;
     ProtoWire::appendVarint(&frame, 1, 1);
     ProtoWire::appendBytes(&frame, 2, v1);
-    status(QObject::tr("Richiesta di invio a %1 — PIN %2 — attendo conferma")
+    status(QObject::tr("status_send_request_waiting")
                .arg(m_deviceName, m_pin));
     return sendSharingFrame(frame);
 }
@@ -859,7 +859,7 @@ bool QuickShareSender::sendFiles()
     }
     if (!sendDisconnection())
         return fail(QObject::tr("chiusura del trasferimento fallita"));
-    status(QObject::tr("Attendo conferma ricezione da %1…").arg(m_deviceName));
+    status(QObject::tr("status_waiting_receive_confirmation").arg(m_deviceName));
     if (!waitForSafeDisconnect())
         return fail(QObject::tr("conferma ricezione non valida"));
     status(QObject::tr("Invio completato a %1").arg(m_deviceName));
@@ -867,7 +867,7 @@ bool QuickShareSender::sendFiles()
         const OutgoingFile &file = m_files.at(i);
         QMetaObject::invokeMethod(m_service, "appendEvent", Qt::QueuedConnection,
                                   Q_ARG(QString, file.name),
-                                  Q_ARG(QString, QObject::tr("Inviato a %1 · %2")
+                                  Q_ARG(QString, QObject::tr("history_sent_to")
                                       .arg(m_deviceName, humanSize(file.size))),
                                   Q_ARG(QString, QString()));
     }
@@ -972,7 +972,7 @@ bool QuickShareSender::run()
     if (!sendIntroduction())
         return fail(QObject::tr("invio metadati file fallito"));
 
-    status(QObject::tr("Attendi la conferma su %1 — verifica PIN %2")
+    status(QObject::tr("status_wait_confirmation_pin")
                .arg(m_deviceName, m_pin));
     if (!receiveSharingFrame(&frame, 60000))
         return fail(QObject::tr("conferma di ricezione scaduta"));

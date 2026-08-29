@@ -936,9 +936,9 @@ void *workerMain(void *arg)
             generateDnsIdentity(ctx);
     }
     if (!identityAvailable)
-        postStatus(ctx, QObject::tr("Attenzione: impossibile verificare l'unicità del nome mDNS"));
+        postStatus(ctx, QObject::tr("warning_mdns_name_uniqueness"));
 
-    postStatus(ctx, QObject::tr("Attivo — visibile come \"%1\" — IP %2, TCP %3")
+    postStatus(ctx, QObject::tr("status_active_endpoint")
                         .arg(QString::fromUtf8(ctx->deviceName))
                         .arg(QString::fromUtf8(inet_ntoa(*((struct in_addr *)&ctx->localIp))))
                         .arg(ctx->tcpPort));
@@ -1249,10 +1249,10 @@ void ShareService::loadHistory()
         QString translatedTemplate;
         if (detail.startsWith(receivedPrefix)) {
             sourcePrefix = receivedPrefix;
-            translatedTemplate = QObject::tr("Ricevuto da %1 · %2");
+            translatedTemplate = QObject::tr("history_received_from");
         } else if (detail.startsWith(sentPrefix)) {
             sourcePrefix = sentPrefix;
-            translatedTemplate = QObject::tr("Inviato a %1 · %2");
+            translatedTemplate = QObject::tr("history_sent_to");
         }
         if (!sourcePrefix.isEmpty()) {
             const int firstSeparator = detail.indexOf(separator, sourcePrefix.size());
@@ -1346,10 +1346,10 @@ void ShareService::selectOutgoingFiles(const QStringList &paths)
         ? QFileInfo(accepted.first()).fileName()
         : QObject::tr("%1 file").arg(accepted.size());
     if (bytes >= 1024 * 1024)
-        m_outgoingDetail = QObject::tr("%1 MB · pronto per l'invio")
+        m_outgoingDetail = QObject::tr("size_mb_ready")
             .arg((double)bytes / (1024.0 * 1024.0), 0, 'f', 1);
     else
-        m_outgoingDetail = QObject::tr("%1 KB · pronto per l'invio")
+        m_outgoingDetail = QObject::tr("size_kb_ready")
             .arg(qMax<qint64>(1, (bytes + 1023) / 1024));
     emit outgoingChanged();
 }
@@ -1429,7 +1429,7 @@ void ShareService::scanDevices()
 {
     if (m_scanning) return;
     setScanning(true);
-    setStatus(QObject::tr("Ricerca dispositivi vicini…"));
+    setStatus(QObject::tr("status_search_nearby"));
     QMutexLocker locker(&m_discoveryMutex);
     m_scanRequested = true;
 }
@@ -1463,7 +1463,7 @@ void ShareService::sendOutgoing()
         m_resolveInstanceRequested = m_selectedDeviceInstance;
     }
     m_sendRefreshPending = true;
-    setStatus(QObject::tr("Ricerca dispositivi vicini…"));
+    setStatus(QObject::tr("status_search_nearby"));
     QTimer::singleShot(2000, this, SLOT(sendOutgoingResolved()));
 }
 
@@ -1484,14 +1484,14 @@ void ShareService::sendOutgoingResolved()
     }
     if (!current) {
         clearDeviceSelection();
-        setStatus(QObject::tr("Il dispositivo non è più disponibile: esegui una nuova ricerca"));
+        setStatus(QObject::tr("error_device_unavailable"));
         return;
     }
     m_sendActive = true;
     m_sendFailed = false;
-    m_sendStatus = QObject::tr("Connessione al dispositivo…");
+    m_sendStatus = QObject::tr("status_connecting_device");
     emit sendStateChanged();
-    setTransferProgress(0.0f, QObject::tr("Connessione…"));
+    setTransferProgress(0.0f, QObject::tr("status_connecting"));
     SenderArgs *args = new SenderArgs;
     args->paths = m_outgoingPaths;
     args->address = m_selectedDeviceAddress;
