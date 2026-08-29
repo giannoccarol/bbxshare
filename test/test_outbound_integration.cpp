@@ -21,6 +21,7 @@ int main(int argc, char **argv)
     if (!temporary.isValid()) return 1;
 
     const QString sourcePath = temporary.path() + "/payload.bin";
+    const QString secondSourcePath = temporary.path() + "/second.txt";
     const QString receiveDir = temporary.path() + "/received";
     QByteArray expected;
     expected.resize(700 * 1024 + 37);
@@ -30,6 +31,12 @@ int main(int argc, char **argv)
     if (!source.open(QIODevice::WriteOnly) || source.write(expected) != expected.size())
         return 2;
     source.close();
+    const QByteArray secondExpected("secondo payload BBX Share\n");
+    QFile secondSource(secondSourcePath);
+    if (!secondSource.open(QIODevice::WriteOnly) ||
+        secondSource.write(secondExpected) != secondExpected.size())
+        return 2;
+    secondSource.close();
     qputenv("BBXSHARE_DOWNLOAD_DIR", receiveDir.toLocal8Bit());
 
     int listener = socket(AF_INET, SOCK_STREAM, 0);
@@ -55,21 +62,41 @@ int main(int argc, char **argv)
         receiverResult = session.run();
     });
 
-    QuickShareSender sender(sourcePath, QString::fromLatin1("127.0.0.1"),
+    QuickShareSender sender(QStringList() << sourcePath << secondSourcePath,
+                            QString::fromLatin1("127.0.0.1"),
                             ntohs(address.sin_port),
-                            QString::fromLatin1("Receiver test"), &service);
+                            QString::fromLatin1("Receiver test"),
+                            QString::fromLatin1("Sender test"), &service);
     const bool senderResult = sender.run();
     receiver.join();
     close(listener);
+    app.processEvents();
 
     QFile received(receiveDir + "/payload.bin");
-    if (!received.open(QIODevice::ReadOnly)) return 5;
+    if (!received.open(QIODevice::ReadOnly)) {
+        fprintf(stderr, "FAIL file principale assente; senderResult=%d receiverResult=%d sender=%s receiver=%s\n",
+                senderResult, receiverResult,
+                service.lastSendStatus().toUtf8().constData(),
+                service.lastStatus().toUtf8().constData());
+        return 5;
+    }
     const QByteArray actual = received.readAll();
-    if (!senderResult || !receiverResult || actual != expected) {
+    QFile secondReceived(receiveDir + "/second.txt");
+    if (!secondReceived.open(QIODevice::ReadOnly)) {
+        fprintf(stderr, "FAIL secondo file assente; senderResult=%d receiverResult=%d sender=%s receiver=%s\n",
+                senderResult, receiverResult,
+                service.lastSendStatus().toUtf8().constData(),
+                service.lastStatus().toUtf8().constData());
+        return 5;
+    }
+    const QByteArray secondActual = secondReceived.readAll();
+    if (!senderResult || !receiverResult || actual != expected ||
+        secondActual != secondExpected) {
         fprintf(stderr, "FAIL sender=%d receiver=%d bytes=%d/%d\n",
                 senderResult, receiverResult, actual.size(), expected.size());
         return 6;
     }
-    printf("OK - invio end-to-end cifrato, %d byte verificati\n", actual.size());
+    printf("OK - invio multi-file cifrato, %d byte verificati\n",
+           actual.size() + secondActual.size());
     return 0;
 }

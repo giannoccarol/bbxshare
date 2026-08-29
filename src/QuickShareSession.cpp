@@ -9,15 +9,19 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QMetaObject>
 #include <QtCore/QStringList>
+#include <QtCore/QTemporaryFile>
 
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/statvfs.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include <openssl/bn.h>
+#include <openssl/crypto.h>
 #include <openssl/ec.h>
 #include <openssl/ecdh.h>
 #include <openssl/evp.h>
@@ -29,7 +33,11 @@
 namespace {
 
 const int MAX_FRAME_SIZE = 5 * 1024 * 1024;
+const qint64 MAX_BYTE_PAYLOAD_SIZE = 5 * 1024 * 1024;
+const qint64 MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
+const qint64 DISK_RESERVE_BYTES = 4 * 1024 * 1024;
 const int CONSENT_TIMEOUT_MS = 60000;
+const int RECEIVE_INACTIVITY_TIMEOUT_MS = 60000;
 
 bool nestedBytes(const QByteArray &outer, int field, QByteArray *inner)
 {
@@ -48,6 +56,12 @@ QByteArray hmacSha256(const QByteArray &key, const QByteArray &data)
     HMAC(EVP_sha256(), key.constData(), key.size(),
          (const unsigned char *)data.constData(), data.size(), digest, &size);
     return QByteArray((const char *)digest, (int)size);
+}
+
+bool secureEquals(const QByteArray &left, const QByteArray &right)
+{
+    return left.size() == right.size() &&
+           CRYPTO_memcmp(left.constData(), right.constData(), left.size()) == 0;
 }
 
 QByteArray sha256(const QByteArray &data)
@@ -70,8 +84,15 @@ QuickShareSession::QuickShareSession(int socketFd, const QString &peerAddress,
                                      ShareService *service)
     : m_fd(socketFd), m_peerAddress(peerAddress), m_service(service),
       m_state(PlainHandshake), m_ecKey(0), m_clientSequence(0),
-      m_serverSequence(0), m_totalBytes(0), m_receivedBytes(0)
+      m_serverSequence(0), m_totalBytes(0), m_receivedBytes(0),
+      m_bufferedBytes(0)
 {
+    struct timeval ioTimeout;
+    ioTimeout.tv_sec = 30;
+    ioTimeout.tv_usec = 0;
+    setsockopt(m_fd, SOL_SOCKET, SO_SNDTIMEO, &ioTimeout, sizeof(ioTimeout));
+    setsockopt(m_fd, SOL_SOCKET, SO_RCVTIMEO, &ioTimeout, sizeof(ioTimeout));
+    m_activityTimer.start();
 }
 
 QuickShareSession::~QuickShareSession()
@@ -94,18 +115,11 @@ void QuickShareSession::status(const QString &message) const
                               Q_ARG(QString, message));
 }
 
-void QuickShareSession::event(const QString &title, const QString &detail) const
-{
-    QMetaObject::invokeMethod(m_service, "appendEvent", Qt::QueuedConnection,
-                              Q_ARG(QString, title), Q_ARG(QString, detail));
-}
-
 bool QuickShareSession::fail(const QString &message)
 {
     m_error = message;
     QMetaObject::invokeMethod(m_service, "clearTransferProgress", Qt::QueuedConnection);
-    status(QString::fromUtf8("Errore ricezione: %1").arg(message));
-    event(QString::fromUtf8("Trasferimento non riuscito"), message);
+    status(QObject::tr("Errore ricezione: %1").arg(message));
     return false;
 }
 
@@ -132,6 +146,12 @@ bool QuickShareSession::sendAll(const char *data, int size)
 {
     int done = 0;
     while (done < size) {
+        struct pollfd pfd;
+        pfd.fd = m_fd;
+        pfd.events = POLLOUT;
+        pfd.revents = 0;
+        if (poll(&pfd, 1, 10000) <= 0 || !(pfd.revents & POLLOUT))
+            return false;
         int count = send(m_fd, data + done, size - done, 0);
         if (count <= 0)
             return false;
@@ -149,7 +169,7 @@ bool QuickShareSession::readFrame(QByteArray *frame, int timeoutMs)
                      ((quint32)lengthBytes[1] << 16) |
                      ((quint32)lengthBytes[2] << 8) | lengthBytes[3];
     if (length == 0 || length > (quint32)MAX_FRAME_SIZE)
-        return fail(QString::fromUtf8("dimensione frame non valida: %1").arg(length));
+        return fail(QObject::tr("dimensione frame non valida: %1").arg(length));
     frame->resize((int)length);
     return receiveExact(frame->data(), (int)length, timeoutMs);
 }
@@ -275,15 +295,15 @@ bool QuickShareSession::processConnectionRequest(const QByteArray &frame)
         !nestedVarint(v1, 1, &type) || type != 1 ||
         !nestedBytes(v1, 2, &request) ||
         !nestedBytes(request, 6, &endpoint))
-        return fail(QString::fromUtf8("ConnectionRequest protobuf non valido"));
+        return fail(QObject::tr("ConnectionRequest protobuf non valido"));
 
     if (endpoint.size() < 18)
-        return fail(QString::fromUtf8("endpoint info troppo corto"));
+        return fail(QObject::tr("endpoint info troppo corto"));
     int nameLength = (unsigned char)endpoint.at(17);
     if (endpoint.size() < 18 + nameLength)
-        return fail(QString::fromUtf8("nome endpoint troncato"));
+        return fail(QObject::tr("nome endpoint troncato"));
     m_peerName = QString::fromUtf8(endpoint.constData() + 18, nameLength);
-    status(QString::fromUtf8("Connessione da %1 (%2) — negoziazione sicura")
+    status(QObject::tr("Connessione da %1 (%2) — negoziazione sicura")
                .arg(m_peerName, m_peerAddress));
     return true;
 }
@@ -298,7 +318,7 @@ bool QuickShareSession::processClientInit(const QByteArray &frame)
         !nestedBytes(data, 2, &random) || random.size() != 32 ||
         !nestedBytes(data, 4, &protocol) ||
         protocol != "AES_256_CBC-HMAC_SHA256")
-        return fail(QString::fromUtf8("UKEY2 ClientInit non supportato"));
+        return fail(QObject::tr("UKEY2 ClientInit non supportato"));
 
     const QList<QByteArray> commitments = ProtoWire::repeatedBytes(data, 3);
     for (int i = 0; i < commitments.size(); ++i) {
@@ -311,11 +331,11 @@ bool QuickShareSession::processClientInit(const QByteArray &frame)
         }
     }
     if (m_commitment.size() != SHA512_DIGEST_LENGTH)
-        return fail(QString::fromUtf8("cipher P-256/SHA-512 assente"));
+        return fail(QObject::tr("cipher P-256/SHA-512 assente"));
 
     m_ecKey = EC_KEY_new_by_curve_name(NID_X9_62_prime256v1);
     if (!m_ecKey || EC_KEY_generate_key(m_ecKey) != 1)
-        return fail(QString::fromUtf8("generazione chiave P-256 fallita"));
+        return fail(QObject::tr("generazione chiave P-256 fallita"));
 
     const EC_GROUP *group = EC_KEY_get0_group(m_ecKey);
     const EC_POINT *point = EC_KEY_get0_public_key(m_ecKey);
@@ -323,7 +343,7 @@ bool QuickShareSession::processClientInit(const QByteArray &frame)
     BIGNUM *y = BN_new();
     if (!x || !y || EC_POINT_get_affine_coordinates_GFp(group, point, x, y, 0) != 1) {
         BN_free(x); BN_free(y);
-        return fail(QString::fromUtf8("lettura chiave pubblica fallita"));
+        return fail(QObject::tr("lettura chiave pubblica fallita"));
     }
 
     QByteArray ecPublic;
@@ -348,7 +368,7 @@ bool QuickShareSession::processClientInit(const QByteArray &frame)
     m_clientInitRaw = frame;
     m_serverInitRaw = message;
     if (!sendFrame(message))
-        return fail(QString::fromUtf8("invio UKEY2 ServerInit fallito"));
+        return fail(QObject::tr("invio UKEY2 ServerInit fallito"));
     return true;
 }
 
@@ -359,12 +379,12 @@ bool QuickShareSession::deriveKeys(const QByteArray &genericPublicKey)
     if (!nestedVarint(genericPublicKey, 1, &keyType) || keyType != 1 ||
         !nestedBytes(genericPublicKey, 2, &ecPublic) ||
         !nestedBytes(ecPublic, 1, &xBytes) || !nestedBytes(ecPublic, 2, &yBytes))
-        return fail(QString::fromUtf8("chiave pubblica client non valida"));
+        return fail(QObject::tr("chiave pubblica client non valida"));
 
     while (xBytes.size() > 32 && xBytes.at(0) == 0) xBytes.remove(0, 1);
     while (yBytes.size() > 32 && yBytes.at(0) == 0) yBytes.remove(0, 1);
     if (xBytes.size() > 32 || yBytes.size() > 32)
-        return fail(QString::fromUtf8("coordinate P-256 fuori formato"));
+        return fail(QObject::tr("coordinate P-256 fuori formato"));
     xBytes = QByteArray(32 - xBytes.size(), 0) + xBytes;
     yBytes = QByteArray(32 - yBytes.size(), 0) + yBytes;
 
@@ -378,14 +398,14 @@ bool QuickShareSession::deriveKeys(const QByteArray &genericPublicKey)
     BN_free(x); BN_free(y);
     if (!valid) {
         EC_POINT_free(peer);
-        return fail(QString::fromUtf8("punto P-256 client non valido"));
+        return fail(QObject::tr("punto P-256 client non valido"));
     }
 
     unsigned char shared[32];
     int sharedSize = ECDH_compute_key(shared, sizeof(shared), peer, m_ecKey, 0);
     EC_POINT_free(peer);
     if (sharedSize <= 0)
-        return fail(QString::fromUtf8("ECDH fallito"));
+        return fail(QObject::tr("ECDH fallito"));
     QByteArray sharedSecret((const char *)shared, sharedSize);
     if (sharedSecret.size() < 32)
         sharedSecret.prepend(QByteArray(32 - sharedSecret.size(), 0));
@@ -422,9 +442,9 @@ bool QuickShareSession::processClientFinish(const QByteArray &frame)
     if (!nestedVarint(frame, 1, &type) || type != 4 ||
         !nestedBytes(frame, 2, &data) ||
         !nestedBytes(data, 1, &genericPublic))
-        return fail(QString::fromUtf8("UKEY2 ClientFinish non valido"));
+        return fail(QObject::tr("UKEY2 ClientFinish non valido"));
     if (sha512(frame) != m_commitment)
-        return fail(QString::fromUtf8("commitment UKEY2 non corrispondente"));
+        return fail(QObject::tr("commitment UKEY2 non corrispondente"));
     return deriveKeys(genericPublic);
 }
 
@@ -446,7 +466,7 @@ bool QuickShareSession::processClientConnectionResponse(const QByteArray &frame)
     QByteArray v1;
     quint64 type = 0;
     if (!nestedBytes(frame, 2, &v1) || !nestedVarint(v1, 1, &type) || type != 2)
-        return fail(QString::fromUtf8("ConnectionResponse client mancante"));
+        return fail(QObject::tr("ConnectionResponse client mancante"));
 
     QByteArray osInfo;
     ProtoWire::appendVarint(&osInfo, 1, 100); // Linux: valore non-Android neutro
@@ -455,7 +475,7 @@ bool QuickShareSession::processClientConnectionResponse(const QByteArray &frame)
     ProtoWire::appendVarint(&response, 3, 1); // ACCEPT
     ProtoWire::appendBytes(&response, 4, osInfo);
     if (!sendFrame(makeOfflineFrame(2, 3, response)))
-        return fail(QString::fromUtf8("invio ConnectionResponse fallito"));
+        return fail(QObject::tr("invio ConnectionResponse fallito"));
     m_state = AwaitPairedEncryption;
     return sendPairedKeyEncryption();
 }
@@ -469,7 +489,7 @@ bool QuickShareSession::sendEncryptedOffline(const QByteArray &offline)
     const QByteArray iv = randomBytes(16);
     const QByteArray encrypted = aesCrypt(d2d, m_encryptKey, iv, true);
     if (encrypted.isEmpty())
-        return fail(QString::fromUtf8("cifratura AES fallita"));
+        return fail(QObject::tr("cifratura AES fallita"));
 
     QByteArray metadata;
     ProtoWire::appendVarint(&metadata, 1, 13); // DEVICE_TO_DEVICE_MESSAGE
@@ -495,28 +515,32 @@ bool QuickShareSession::decryptOffline(const QByteArray &secureMessage,
     QByteArray headerAndBody, signature, header, body, iv;
     if (!nestedBytes(secureMessage, 1, &headerAndBody) ||
         !nestedBytes(secureMessage, 2, &signature) ||
-        signature != hmacSha256(m_receiveHmacKey, headerAndBody) ||
+        !secureEquals(signature, hmacSha256(m_receiveHmacKey, headerAndBody)) ||
         !nestedBytes(headerAndBody, 1, &header) ||
         !nestedBytes(headerAndBody, 2, &body) ||
         !nestedBytes(header, 5, &iv))
-        return fail(QString::fromUtf8("SecureMessage/HMAC non valido"));
+        return fail(QObject::tr("SecureMessage/HMAC non valido"));
 
     const QByteArray plain = aesCrypt(body, m_decryptKey, iv, false);
     QByteArray message;
     quint64 sequence = 0;
     if (plain.isEmpty() || !nestedBytes(plain, 1, &message) ||
         !nestedVarint(plain, 2, &sequence) || sequence != (quint64)++m_clientSequence)
-        return fail(QString::fromUtf8("sequenza SecureMessage non valida"));
+        return fail(QObject::tr("sequenza SecureMessage non valida"));
     *offline = message;
     return true;
 }
 
 bool QuickShareSession::sendSharingFrame(const QByteArray &sharingFrame)
 {
-    QByteArray idBytes = randomBytes(8);
     quint64 id = 0;
-    for (int i = 0; i < idBytes.size(); ++i)
-        id = (id << 8) | (unsigned char)idBytes.at(i);
+    do {
+        const QByteArray idBytes = randomBytes(8);
+        id = 0;
+        for (int i = 0; i < idBytes.size(); ++i)
+            id = (id << 8) | (unsigned char)idBytes.at(i);
+        id &= Q_UINT64_C(0x7fffffffffffffff);
+    } while (id == 0);
 
     QByteArray header;
     ProtoWire::appendVarint(&header, 1, id);
@@ -592,18 +616,51 @@ bool QuickShareSession::sendKeepAliveAck()
     return sendEncryptedOffline(makeOfflineFrame(5, 6, keepAlive));
 }
 
-QString QuickShareSession::safeDestination(const QString &name) const
+QString QuickShareSession::downloadDirectory() const
 {
     QString directory = QString::fromLocal8Bit(qgetenv("BBXSHARE_DOWNLOAD_DIR"));
     if (directory.isEmpty())
         directory = QString::fromUtf8("/accounts/1000/shared/downloads/BBXShare");
-    QDir().mkpath(directory);
+    return directory;
+}
+
+bool QuickShareSession::preflightDestination(qint64 totalBytes)
+{
+    const QString directory = downloadDirectory();
+    if (totalBytes < 0 || (!QDir(directory).exists() && !QDir().mkpath(directory)))
+        return fail(QObject::tr("cartella di destinazione non disponibile"));
+
+    QTemporaryFile probe(QDir(directory).filePath(
+        QString::fromUtf8(".bbxshare-write-XXXXXX")));
+    probe.setAutoRemove(true);
+    if (!probe.open() || probe.write("x", 1) != 1 || !probe.flush())
+        return fail(QObject::tr("cartella di destinazione non scrivibile"));
+    probe.close();
+
+    struct statvfs fs;
+    const QByteArray nativePath = QFile::encodeName(directory);
+    if (statvfs(nativePath.constData(), &fs) != 0)
+        return fail(QObject::tr("impossibile verificare lo spazio disponibile"));
+    const quint64 blockSize = fs.f_frsize ? fs.f_frsize : fs.f_bsize;
+    const quint64 required = (quint64)totalBytes + DISK_RESERVE_BYTES;
+    if (blockSize == 0 || (quint64)fs.f_bavail <
+        (required + blockSize - 1) / blockSize)
+        return fail(QObject::tr("spazio insufficiente: servono almeno %1")
+                    .arg(humanSize(totalBytes)));
+    return true;
+}
+
+QString QuickShareSession::safeDestination(const QString &name)
+{
+    const QString directory = downloadDirectory();
     QString safe = QFileInfo(name).fileName();
     if (safe.isEmpty() || safe == "." || safe == "..")
         safe = QString::fromUtf8("ricevuto.bin");
     QString path = directory + "/" + safe;
-    if (!QFile::exists(path))
+    if (!QFile::exists(path) && !m_reservedPaths.contains(path)) {
+        m_reservedPaths.insert(path);
         return path;
+    }
     const QFileInfo info(path);
     const QString base = info.completeBaseName();
     const QString suffix = info.suffix();
@@ -612,8 +669,10 @@ QString QuickShareSession::safeDestination(const QString &name) const
                             QString::fromUtf8(" (%1)").arg(i);
         if (!suffix.isEmpty())
             candidate += "." + suffix;
-        if (!QFile::exists(candidate))
+        if (!QFile::exists(candidate) && !m_reservedPaths.contains(candidate)) {
+            m_reservedPaths.insert(candidate);
             return candidate;
+        }
     }
 }
 
@@ -650,7 +709,11 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
         if (!nestedBytes(fileMetadata.at(i), 1, &nameBytes) ||
             !nestedVarint(fileMetadata.at(i), 3, &id) ||
             !nestedVarint(fileMetadata.at(i), 4, &size))
-            return fail(QString::fromUtf8("metadata file incompleti"));
+            return fail(QObject::tr("metadata file incompleti"));
+        if (id > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
+            size > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
+            m_files.contains((qint64)id))
+            return fail(QObject::tr("identificatore o dimensione file non validi"));
         nestedBytes(fileMetadata.at(i), 5, &mimeBytes);
         IncomingFile *file = new IncomingFile;
         file->name = QString::fromUtf8(nameBytes);
@@ -663,6 +726,8 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
         file->file = 0;
         m_files.insert(file->payloadId, file);
         names.append(file->name);
+        if (total > Q_INT64_C(0x7fffffffffffffff) - file->size)
+            return fail(QObject::tr("dimensione totale non valida"));
         total += file->size;
     }
 
@@ -670,9 +735,13 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
         quint64 id = 0, size = 0;
         if (!nestedVarint(textMetadata.at(i), 4, &id) ||
             !nestedVarint(textMetadata.at(i), 5, &size))
-            return fail(QString::fromUtf8("metadata testo incompleti"));
+            return fail(QObject::tr("metadata testo incompleti"));
+        if (id > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
+            size > (quint64)MAX_BYTE_PAYLOAD_SIZE ||
+            m_files.contains((qint64)id))
+            return fail(QObject::tr("payload testo troppo grande o non valido"));
         IncomingFile *file = new IncomingFile;
-        file->name = QString::fromUtf8("Testo ricevuto %1.txt")
+        file->name = QObject::tr("Testo ricevuto %1.txt")
             .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH.mm.ss"));
         file->mimeType = QString::fromUtf8("text/plain");
         file->path = safeDestination(file->name);
@@ -683,24 +752,28 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
         file->file = 0;
         m_files.insert(file->payloadId, file);
         names.append(file->name);
+        if (total > Q_INT64_C(0x7fffffffffffffff) - file->size)
+            return fail(QObject::tr("dimensione totale non valida"));
         total += file->size;
     }
 
     if (m_files.isEmpty())
-        return fail(QString::fromUtf8("tipo di allegato non supportato"));
+        return fail(QObject::tr("tipo di allegato non supportato"));
 
     m_totalBytes = total;
     m_receivedBytes = 0;
+    if (!preflightDestination(total))
+        return false;
 
-    const QString title = QString::fromUtf8("%1 vuole condividere %2 elemento/i")
+    const QString title = QObject::tr("%1 vuole condividere %2 elemento/i")
         .arg(m_peerName).arg(m_files.size());
-    const QString detail = QString::fromUtf8("%1\nTotale: %2 · PIN %3")
+    const QString detail = QObject::tr("%1\nTotale: %2 · PIN %3")
         .arg(names.join(QString::fromUtf8(", "))).arg(humanSize(total)).arg(m_pin);
     if (!m_service->beginConsent(title, detail))
-        return fail(QString::fromUtf8("un altro trasferimento è già in attesa"));
+        return fail(QObject::tr("un altro trasferimento è già in attesa"));
     m_state = AwaitConsent;
     m_consentTimer.start();
-    status(QString::fromUtf8("Conferma il trasferimento da %1 — PIN %2")
+    status(QObject::tr("Conferma il trasferimento da %1 — PIN %2")
                .arg(m_peerName, m_pin));
     return true;
 }
@@ -710,14 +783,14 @@ bool QuickShareSession::processSharingFrame(const QByteArray &frame)
     QByteArray v1;
     quint64 type = 0;
     if (!nestedBytes(frame, 2, &v1) || !nestedVarint(v1, 1, &type))
-        return fail(QString::fromUtf8("frame Share non valido"));
+        return fail(QObject::tr("frame Share non valido"));
     if (type == 6)
-        return fail(QString::fromUtf8("trasferimento annullato dal telefono"));
+        return fail(QObject::tr("trasferimento annullato dal telefono"));
 
     if (m_state == AwaitPairedEncryption && type == 3) {
         QByteArray paired;
         if (!nestedBytes(v1, 4, &paired))
-            return fail(QString::fromUtf8("PairedKeyEncryption mancante"));
+            return fail(QObject::tr("PairedKeyEncryption mancante"));
         if (!sendPairedKeyResult())
             return false;
         m_state = AwaitPairedResult;
@@ -726,14 +799,14 @@ bool QuickShareSession::processSharingFrame(const QByteArray &frame)
     if (m_state == AwaitPairedResult && type == 4) {
         QByteArray result;
         if (!nestedBytes(v1, 5, &result))
-            return fail(QString::fromUtf8("PairedKeyResult mancante"));
+            return fail(QObject::tr("PairedKeyResult mancante"));
         m_state = AwaitIntroduction;
         return true;
     }
     if (m_state == AwaitIntroduction && type == 1) {
         QByteArray introduction;
         if (!nestedBytes(v1, 2, &introduction))
-            return fail(QString::fromUtf8("Introduction mancante"));
+            return fail(QObject::tr("Introduction mancante"));
         return processIntroduction(introduction);
     }
     return true;
@@ -744,30 +817,34 @@ bool QuickShareSession::processIncomingFile(qint64 id, qint64 offset, int flags,
 {
     IncomingFile *file = m_files.value(id, 0);
     if (!file)
-        return fail(QString::fromUtf8("payload file sconosciuto: %1").arg(id));
+        return fail(QObject::tr("payload file sconosciuto: %1").arg(id));
     if (offset != file->received || file->received + body.size() > file->size)
-        return fail(QString::fromUtf8("offset/dimensione non valida per %1").arg(file->name));
+        return fail(QObject::tr("offset/dimensione non valida per %1").arg(file->name));
     if (!file->file)
-        return fail(QString::fromUtf8("file di destinazione non aperto: %1").arg(file->name));
+        return fail(QObject::tr("file di destinazione non aperto: %1").arg(file->name));
     if (!body.isEmpty() && file->file->write(body) != body.size())
-        return fail(QString::fromUtf8("scrittura fallita: %1").arg(file->path));
+        return fail(QObject::tr("scrittura fallita: %1").arg(file->path));
     file->received += body.size();
     m_receivedBytes += body.size();
-    status(QString::fromUtf8("Ricezione %1 — %2 / %3")
+    status(QObject::tr("Ricezione %1 — %2 / %3")
                .arg(file->name, humanSize(file->received), humanSize(file->size)));
     const float progress = m_totalBytes > 0
         ? (float)((double)m_receivedBytes / (double)m_totalBytes) : 0.0f;
     QMetaObject::invokeMethod(m_service, "setTransferProgress", Qt::QueuedConnection,
                               Q_ARG(float, progress),
-                              Q_ARG(QString, QString::fromUtf8("%1 di %2")
+                              Q_ARG(QString, QObject::tr("%1 di %2")
                                   .arg(humanSize(m_receivedBytes), humanSize(m_totalBytes))));
 
     if (flags & 1) {
         file->file->flush();
         file->file->close();
         if (file->received != file->size)
-            return fail(QString::fromUtf8("file incompleto: %1").arg(file->name));
-        event(QString::fromUtf8("File ricevuto"), file->path);
+            return fail(QObject::tr("file incompleto: %1").arg(file->name));
+        QMetaObject::invokeMethod(m_service, "appendEvent", Qt::QueuedConnection,
+                                  Q_ARG(QString, file->name),
+                                  Q_ARG(QString, QObject::tr("Ricevuto da %1 · %2")
+                                      .arg(m_peerName, humanSize(file->size))),
+                                  Q_ARG(QString, file->path));
         delete file->file;
         file->file = 0;
         m_files.remove(id);
@@ -775,9 +852,7 @@ bool QuickShareSession::processIncomingFile(qint64 id, qint64 offset, int flags,
         if (m_files.isEmpty()) {
             QMetaObject::invokeMethod(m_service, "clearTransferProgress",
                                       Qt::QueuedConnection);
-            status(QString::fromUtf8("Trasferimento completato"));
-            event(QString::fromUtf8("Trasferimento completato"),
-                  QString::fromUtf8("Ricezione da %1 terminata").arg(m_peerName));
+            status(QObject::tr("Trasferimento completato"));
         }
     }
     return true;
@@ -786,31 +861,56 @@ bool QuickShareSession::processIncomingFile(qint64 id, qint64 offset, int flags,
 bool QuickShareSession::processPayloadTransfer(const QByteArray &payloadTransfer)
 {
     QByteArray header, chunk, body;
-    quint64 packetType = 0, rawId = 0, payloadType = 0, offset = 0, flags = 0;
+    quint64 packetType = 0, rawId = 0, payloadType = 0, totalSize = 0;
+    quint64 offset = 0, flags = 0;
     if (!nestedVarint(payloadTransfer, 1, &packetType) || packetType != 1 ||
         !nestedBytes(payloadTransfer, 2, &header) ||
         !nestedBytes(payloadTransfer, 3, &chunk) ||
         !nestedVarint(header, 1, &rawId) ||
         !nestedVarint(header, 2, &payloadType) ||
+        !nestedVarint(header, 3, &totalSize) ||
         !nestedVarint(chunk, 1, &flags) || !nestedVarint(chunk, 2, &offset))
-        return fail(QString::fromUtf8("PayloadTransfer non valido"));
+        return fail(QObject::tr("PayloadTransfer non valido"));
     nestedBytes(chunk, 3, &body);
+    if (rawId > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
+        offset > (quint64)Q_INT64_C(0x7fffffffffffffff))
+        return fail(QObject::tr("identificatore o offset payload non valido"));
     const qint64 id = (qint64)rawId;
 
-    if (payloadType == 2)
+    if (payloadType == 2) {
+        IncomingFile *file = m_files.value(id, 0);
+        if (!file || totalSize != (quint64)file->size)
+            return fail(QObject::tr("dimensione payload file incoerente"));
         return processIncomingFile(id, (qint64)offset, (int)flags, body);
+    }
     if (payloadType != 1)
-        return fail(QString::fromUtf8("tipo payload non supportato: %1").arg(payloadType));
+        return fail(QObject::tr("tipo payload non supportato: %1").arg(payloadType));
+    if (totalSize > (quint64)MAX_BYTE_PAYLOAD_SIZE ||
+        offset > totalSize || (quint64)body.size() > totalSize - offset)
+        return fail(QObject::tr("payload bytes troppo grande o incoerente"));
 
     QByteArray &buffer = m_byteBuffers[id];
     if ((qint64)offset != buffer.size()) {
+        m_bufferedBytes -= buffer.size();
         m_byteBuffers.remove(id);
-        return fail(QString::fromUtf8("offset payload bytes non valido"));
+        return fail(QObject::tr("offset payload bytes non valido"));
+    }
+    if (m_bufferedBytes > MAX_BUFFERED_BYTES - body.size()) {
+        m_bufferedBytes -= buffer.size();
+        m_byteBuffers.remove(id);
+        return fail(QObject::tr("limite memoria payload superato"));
     }
     buffer.append(body);
+    m_bufferedBytes += body.size();
     if (!(flags & 1))
         return true;
+    if ((quint64)buffer.size() != totalSize) {
+        m_bufferedBytes -= buffer.size();
+        m_byteBuffers.remove(id);
+        return fail(QObject::tr("payload bytes incompleto"));
+    }
     const QByteArray complete = buffer;
+    m_bufferedBytes -= buffer.size();
     m_byteBuffers.remove(id);
 
     if (m_state == Receiving && m_files.contains(id) && m_files.value(id)->bytePayload)
@@ -828,13 +928,13 @@ bool QuickShareSession::processEncryptedFrame(const QByteArray &secureMessage)
     if (type == 3) {
         QByteArray transfer;
         if (!nestedBytes(v1, 4, &transfer))
-            return fail(QString::fromUtf8("payload transfer mancante"));
+            return fail(QObject::tr("payload transfer mancante"));
         return processPayloadTransfer(transfer);
     }
     if (type == 5)
         return sendKeepAliveAck();
     if (type == 6)
-        return fail(QString::fromUtf8("connessione chiusa dal telefono"));
+        return fail(QObject::tr("connessione chiusa dal telefono"));
     return true;
 }
 
@@ -871,7 +971,7 @@ bool QuickShareSession::run()
                     it.value()->file = new QFile(it.value()->path);
                     if (!it.value()->file->open(QIODevice::WriteOnly)) {
                         m_service->finishConsent();
-                        return fail(QString::fromUtf8("impossibile creare %1")
+                        return fail(QObject::tr("impossibile creare %1")
                                     .arg(it.value()->path));
                     }
                 }
@@ -881,15 +981,13 @@ bool QuickShareSession::run()
                 }
                 m_service->finishConsent();
                 m_state = Receiving;
+                m_activityTimer.restart();
                 QMetaObject::invokeMethod(m_service, "setTransferProgress",
                                           Qt::QueuedConnection, Q_ARG(float, 0.0f),
-                                          Q_ARG(QString, QString::fromUtf8("In attesa dei dati...")));
-                event(QString::fromUtf8("Trasferimento accettato"),
-                      QString::fromUtf8("Da %1 · PIN %2").arg(m_peerName, m_pin));
+                                          Q_ARG(QString, QObject::tr("In attesa dei dati...")));
             } else if (decision < 0 || m_consentTimer.elapsed() > CONSENT_TIMEOUT_MS) {
                 sendIntroductionResponse(false);
                 m_service->finishConsent();
-                event(QString::fromUtf8("Trasferimento rifiutato"), m_peerName);
                 return true;
             }
         }
@@ -901,14 +999,19 @@ bool QuickShareSession::run()
         int ready = poll(&pfd, 1, 250);
         if (ready < 0) {
             if (errno == EINTR) continue;
-            return fail(QString::fromUtf8("poll TCP: %1").arg(strerror(errno)));
+            return fail(QObject::tr("poll TCP: %1").arg(strerror(errno)));
         }
-        if (ready == 0)
+        if (ready == 0) {
+            if (m_state == Receiving &&
+                m_activityTimer.elapsed() > RECEIVE_INACTIVITY_TIMEOUT_MS)
+                return fail(QObject::tr("trasferimento interrotto per inattività"));
             continue;
+        }
         if (!(pfd.revents & POLLIN))
             return m_files.isEmpty() && m_state == Receiving;
         if (!readFrame(&frame, 30000))
             return m_files.isEmpty() && m_state == Receiving;
+        m_activityTimer.restart();
         if (!processEncryptedFrame(frame))
             return false;
         if (m_state == Receiving && m_files.isEmpty())

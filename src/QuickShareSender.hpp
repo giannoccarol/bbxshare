@@ -2,14 +2,19 @@
 #define QUICKSHARESENDER_HPP_
 
 #include <QtCore/QByteArray>
+#include <QtCore/QList>
+#include <QtCore/QHash>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtCore/QTime>
 
 class ShareService;
 
 class QuickShareSender {
 public:
-    QuickShareSender(const QString &path, const QString &address, int port,
-                     const QString &deviceName, ShareService *service);
+    QuickShareSender(const QStringList &paths, const QString &address, int port,
+                     const QString &deviceName, const QString &localDeviceName,
+                     ShareService *service);
     ~QuickShareSender();
     bool run();
 
@@ -22,6 +27,7 @@ private:
     bool sendEncryptedOffline(const QByteArray &offline);
     bool decryptOffline(const QByteArray &secure, QByteArray *offline);
     bool receiveSharingFrame(QByteArray *sharing, int timeoutMs);
+    int processReceivedOffline(const QByteArray &offline, QByteArray *sharing);
     bool sendSharingFrame(const QByteArray &sharing);
 
     bool sendConnectionRequest();
@@ -34,7 +40,9 @@ private:
     bool sendPairedKeyResult();
     bool sendIntroduction();
     bool processIntroductionResponse(const QByteArray &frame);
-    bool sendFile();
+    bool sendFiles();
+    bool sendFilePayload(const QString &path, quint64 payloadId, qint64 size);
+    bool checkPeerControl();
     bool sendDisconnection();
     bool waitForSafeDisconnect();
 
@@ -50,15 +58,25 @@ private:
     QByteArray fileMimeType(const QString &name) const;
     QString safeName(const QString &name) const;
     QString humanSize(qint64 bytes) const;
+    QString pinFromAuthKey(const QByteArray &key) const;
     bool fail(const QString &message);
     void status(const QString &message) const;
-    void event(const QString &title, const QString &detail) const;
 
     int m_fd;
-    QString m_path;
+    struct OutgoingFile {
+        QString path;
+        QString name;
+        QByteArray mimeType;
+        qint64 size;
+        quint64 payloadId;
+    };
+
+    QStringList m_paths;
     QString m_address;
     int m_port;
     QString m_deviceName;
+    QString m_localDeviceName;
+    QString m_pin;
     ShareService *m_service;
     QByteArray m_clientInitRaw;
     QByteArray m_serverInitRaw;
@@ -67,11 +85,14 @@ private:
     QByteArray m_sendHmacKey;
     QByteArray m_decryptKey;
     QByteArray m_receiveHmacKey;
+    QHash<quint64, QByteArray> m_controlBuffers;
     int m_sendSequence;
     int m_receiveSequence;
-    qint64 m_fileSize;
+    QList<OutgoingFile> m_files;
+    qint64 m_totalSize;
     qint64 m_sentBytes;
-    quint64 m_payloadId;
+    qint64 m_transferDeadlineMs;
+    QTime m_transferTimer;
     bool m_safeDisconnect;
     void *m_ecKey;
 };

@@ -16,3 +16,14 @@ HEADERS += src/ShareService.hpp \
     src/QuickShareSender.hpp
 
 LIBS += -lcrypto -lbbsystem -lbbcascadespickers -lbtapi
+
+TRANSLATIONS += \
+    assets/translations/bbxshare_en.ts \
+    assets/translations/bbxshare_de.ts \
+    assets/translations/bbxshare_fr.ts \
+    assets/translations/bbxshare_es.ts \
+    assets/translations/bbxshare_nl.ts
+
+RESOURCES += assets/translations.qrc
+
+CONFIG += lrelease

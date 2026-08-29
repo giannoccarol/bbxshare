@@ -3,6 +3,7 @@
 
 #include <QtCore/QByteArray>
 #include <QtCore/QHash>
+#include <QtCore/QSet>
 #include <QtCore/QString>
 #include <QtCore/QTime>
 
@@ -73,12 +74,13 @@ private:
     QByteArray aesCrypt(const QByteArray &input, const QByteArray &key,
                         const QByteArray &iv, bool encrypt) const;
     QByteArray signedCoordinate(const void *bn) const;
-    QString safeDestination(const QString &name) const;
+    QString downloadDirectory() const;
+    QString safeDestination(const QString &name);
+    bool preflightDestination(qint64 totalBytes);
     QString humanSize(qint64 bytes) const;
     QString pinFromAuthKey(const QByteArray &key) const;
 
     void status(const QString &message) const;
-    void event(const QString &title, const QString &detail) const;
     bool fail(const QString &message);
     void closeFiles();
 
@@ -101,9 +103,12 @@ private:
     int m_serverSequence;
     qint64 m_totalBytes;
     qint64 m_receivedBytes;
+    qint64 m_bufferedBytes;
     QHash<qint64, QByteArray> m_byteBuffers;
     QHash<qint64, IncomingFile *> m_files;
+    QSet<QString> m_reservedPaths;
     QTime m_consentTimer;
+    QTime m_activityTimer;
 };
 
 #endif

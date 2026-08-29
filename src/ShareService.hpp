@@ -1,10 +1,15 @@
 #ifndef SHARESVC_HPP_
 #define SHARESVC_HPP_
 
+#include <QtCore/QAtomicInt>
 #include <QtCore/QObject>
 #include <QtCore/QMutex>
 #include <QtCore/QString>
+#include <QtCore/QStringList>
+#include <QtCore/QVariantList>
 #include <bb/cascades/ArrayDataModel>
+
+#include <pthread.h>
 
 namespace bb {
 namespace system {
@@ -48,6 +53,7 @@ class ShareService : public QObject {
 
 public:
     explicit ShareService(QObject *parent = 0);
+    ~ShareService();
     QString status() const { return m_status; }
     bb::cascades::ArrayDataModel* events() const { return m_events; }
     bool eventsEmpty() const { return m_events->isEmpty(); }
@@ -58,7 +64,7 @@ public:
     float transferProgress() const { return m_transferProgress; }
     QString transferProgressText() const { return m_transferProgressText; }
     int eventCount() const { return m_events->size(); }
-    bool outgoingReady() const { return !m_outgoingPath.isEmpty(); }
+    bool outgoingReady() const { return !m_outgoingPaths.isEmpty(); }
     QString outgoingPath() const { return m_outgoingPath; }
     QString outgoingName() const { return m_outgoingName; }
     QString outgoingDetail() const { return m_outgoingDetail; }
@@ -79,9 +85,11 @@ public:
     Q_INVOKABLE void clearHistory();
     Q_INVOKABLE void openReceivedFile(const QString &path);
     Q_INVOKABLE void selectOutgoingFile(const QString &path);
+    Q_INVOKABLE void selectOutgoingFiles(const QStringList &paths);
     Q_INVOKABLE void clearOutgoingFile();
     Q_INVOKABLE void scanDevices();
-    Q_INVOKABLE void selectDevice(const QString &address, int port, const QString &name);
+    Q_INVOKABLE void selectDevice(const QString &address, int port,
+                                  const QString &name, const QString &instance);
     Q_INVOKABLE void clearDeviceSelection();
     Q_INVOKABLE void sendOutgoing();
 
@@ -91,6 +99,8 @@ public:
     void finishConsent();
     // Internal hand-off consumed by the mDNS worker.
     bool takeScanRequest();
+    bool takeResolveRequest(QString *instance);
+    bool stopRequested() const { return m_stopRequested != 0; }
 
 signals:
     void statusChanged(const QString &status);
@@ -105,22 +115,25 @@ signals:
 
 public slots:
     void setStatus(const QString &status);
-    void appendEvent(const QString &title, const QString &detail);
+    void appendEvent(const QString &name, const QString &detail, const QString &path);
     void showPendingTransfer(const QString &title, const QString &detail);
     void clearPendingTransfer();
     void setTransferProgress(float progress, const QString &text);
     void clearTransferProgress();
     void clearDevices();
     void setScanning(bool scanning);
-    void addDevice(const QString &name, const QString &address, int port);
+    void syncDevices(const QVariantList &devices);
     void setSendStatus(const QString &status);
     void sendFinished(bool success);
 
 private slots:
     void handleInvoke(const bb::system::InvokeRequest &request);
     void handleOpenFolderReply();
+    void sendOutgoingResolved();
 
 private:
+    void saveHistory();
+    void loadHistory();
     QString m_status;
     bb::cascades::ArrayDataModel *m_events;
     bool m_started;
@@ -133,6 +146,7 @@ private:
     float m_transferProgress;
     QString m_transferProgressText;
     bb::system::InvokeManager *m_invokeManager;
+    QStringList m_outgoingPaths;
     QString m_outgoingPath;
     QString m_outgoingName;
     QString m_outgoingDetail;
@@ -140,12 +154,19 @@ private:
     bool m_scanning;
     QString m_selectedDeviceName;
     QString m_selectedDeviceAddress;
+    QString m_selectedDeviceInstance;
     int m_selectedDevicePort;
     bool m_sendActive;
     bool m_sendFailed;
     QString m_sendStatus;
     QMutex m_discoveryMutex;
     bool m_scanRequested;
+    QString m_resolveInstanceRequested;
+    bool m_sendRefreshPending;
+    QString m_localDeviceName;
+    QAtomicInt m_stopRequested;
+    pthread_t m_workerThread;
+    bool m_workerStarted;
 
 };
 

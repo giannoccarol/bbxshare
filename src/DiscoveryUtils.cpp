@@ -1,5 +1,7 @@
 #include "DiscoveryUtils.hpp"
 
+#include <QtCore/QObject>
+
 namespace BbxDiscovery {
 
 namespace {
@@ -16,13 +18,13 @@ bool isReadableDeviceName(const QString &name)
 
 QString fallbackDeviceName(const QByteArray &endpoint)
 {
-    if (endpoint.isEmpty()) return QString::fromUtf8("Dispositivo vicino");
+    if (endpoint.isEmpty()) return QObject::tr("Dispositivo vicino");
     const int type = ((unsigned char)endpoint.at(0) >> 1) & 7;
     switch (type) {
-    case 1: return QString::fromUtf8("Telefono vicino");
-    case 2: return QString::fromUtf8("Tablet vicino");
-    case 3: return QString::fromUtf8("Computer vicino");
-    default: return QString::fromUtf8("Dispositivo vicino");
+    case 1: return QObject::tr("Telefono vicino");
+    case 2: return QObject::tr("Tablet vicino");
+    case 3: return QObject::tr("Computer vicino");
+    default: return QObject::tr("Dispositivo vicino");
     }
 }
 

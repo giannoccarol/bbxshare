@@ -26,6 +26,18 @@ public:
         return m_decision;
     }
 
+    QString lastStatus()
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_status;
+    }
+
+    QString lastSendStatus()
+    {
+        QMutexLocker locker(&m_mutex);
+        return m_sendStatus;
+    }
+
     void finishConsent()
     {
         QMutexLocker locker(&m_mutex);
@@ -33,15 +45,25 @@ public:
     }
 
 public slots:
-    void setStatus(const QString &) {}
-    void setSendStatus(const QString &) {}
-    void appendEvent(const QString &, const QString &) {}
+    void setStatus(const QString &status)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_status = status;
+    }
+    void setSendStatus(const QString &status)
+    {
+        QMutexLocker locker(&m_mutex);
+        m_sendStatus = status;
+    }
+    void appendEvent(const QString &, const QString &, const QString &) {}
     void setTransferProgress(float, const QString &) {}
     void clearTransferProgress() {}
 
 private:
     QMutex m_mutex;
     int m_decision;
+    QString m_status;
+    QString m_sendStatus;
 };
 
 #endif

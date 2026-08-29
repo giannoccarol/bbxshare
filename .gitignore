@@ -13,6 +13,7 @@ Simulator-*/
 *.a
 *.d
 assets/.assets.index
+tools/__pycache__/
 
 # Generated Qt meta-object sources
 test/moc_*.cpp

@@ -16,19 +16,19 @@ Page {
 
     actions: [
         ActionItem {
-            title: "Attivit\u00e0"
+            title: qsTr("Attivit\u00e0")
             imageSource: "asset:///images/nav_activity.png"
             ActionBar.placement: ActionBarPlacement.OnBar
             onTriggered: appPage.currentSection = "activity"
         },
         ActionItem {
-            title: "Ricevi"
+            title: qsTr("Ricevi")
             imageSource: "asset:///images/nav_receive.png"
             ActionBar.placement: ActionBarPlacement.Signature
             onTriggered: appPage.currentSection = "receive"
         },
         ActionItem {
-            title: "Invia"
+            title: qsTr("Invia")
             imageSource: "asset:///images/nav_send.png"
             ActionBar.placement: ActionBarPlacement.OnBar
             onTriggered: {
@@ -49,7 +49,7 @@ Page {
             verticalAlignment: VerticalAlignment.Fill
             layout: StackLayout { orientation: LayoutOrientation.TopToBottom }
 
-            Header { title: "Attivit\u00e0" }
+            Header { title: qsTr("Attivit\u00e0") }
 
             Container {
                 visible: share.transferActive
@@ -62,7 +62,7 @@ Page {
                 Container {
                     layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                     Label {
-                        text: share.sendActive ? "Invio in corso" : "Ricezione in corso"
+                        text: share.sendActive ? qsTr("Invio in corso") : qsTr("Ricezione in corso")
                         textStyle.fontWeight: FontWeight.Bold
                         layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                     }
@@ -88,14 +88,14 @@ Page {
                 bottomPadding: 8.0
                 layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                 Label {
-                    text: share.eventCount == 1 ? "1 elemento" : share.eventCount + " elementi"
+                    text: share.eventCount == 1 ? qsTr("1 elemento") : qsTr("%1 elementi").arg(share.eventCount)
                     verticalAlignment: VerticalAlignment.Center
                     textStyle.base: SystemDefaults.TextStyles.SmallText
                     textStyle.color: Color.LightGray
                     layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                 }
                 Button {
-                    text: "Pulisci"
+                    text: qsTr("Pulisci")
                     enabled: share.eventCount > 0
                     onClicked: share.clearHistory()
                 }
@@ -113,13 +113,13 @@ Page {
                     leftPadding: 40.0
                     rightPadding: 40.0
                     Label {
-                        text: "Nessun trasferimento"
+                        text: qsTr("Nessun trasferimento")
                         horizontalAlignment: HorizontalAlignment.Center
                         textStyle.base: SystemDefaults.TextStyles.SubtitleText
                         textStyle.fontWeight: FontWeight.Bold
                     }
                     Label {
-                        text: "I file ricevuti e quelli preparati per l'invio compariranno qui."
+                        text: qsTr("I file inviati e ricevuti compariranno qui.")
                         multiline: true
                         horizontalAlignment: HorizontalAlignment.Center
                         textStyle.base: SystemDefaults.TextStyles.SmallText
@@ -184,7 +184,7 @@ Page {
             Container {
                 horizontalAlignment: HorizontalAlignment.Fill
                 bottomPadding: 36.0
-                Header { title: "Ricevi" }
+                Header { title: qsTr("Ricevi") }
                 Container {
                     leftPadding: 24.0
                     rightPadding: 24.0
@@ -200,12 +200,12 @@ Page {
                         Container {
                             layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                             Label {
-                                text: share.transferPending ? "Richiesta in arrivo" :
-                                      (share.transferActive ? "Ricezione in corso" : "Pronto a ricevere")
+                                text: share.transferPending ? qsTr("Richiesta in arrivo") :
+                                      (share.transferActive ? qsTr("Ricezione in corso") : qsTr("Pronto a ricevere"))
                                 textStyle.fontWeight: FontWeight.Bold
                             }
                             Label {
-                                text: "Visibile sulla Wi-Fi come BBX Share"
+                                text: qsTr("Visibile sulla Wi-Fi come BBX Share")
                                 textStyle.base: SystemDefaults.TextStyles.SmallText
                                 textStyle.color: Color.LightGray
                             }
@@ -216,27 +216,27 @@ Page {
                         }
                     }
 
-                    Header { title: "Da Android" }
+                    Header { title: qsTr("Da Android") }
                     Container {
                         topPadding: 10.0; bottomPadding: 10.0
                         layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                         Label { text: "1"; minWidth: 52.0; textStyle.fontWeight: FontWeight.Bold; textStyle.color: Color.create("#ff48a7e8") }
-                        Label { text: "Collega i due telefoni alla stessa rete Wi-Fi."; multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
+                        Label { text: qsTr("Collega i due telefoni alla stessa rete Wi-Fi."); multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
                     }
                     Container {
                         topPadding: 10.0; bottomPadding: 10.0
                         layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                         Label { text: "2"; minWidth: 52.0; textStyle.fontWeight: FontWeight.Bold; textStyle.color: Color.create("#ff48a7e8") }
-                        Label { text: "Da Quick Share su Android scegli BBX Share."; multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
+                        Label { text: qsTr("Da Quick Share su Android scegli BBX Share."); multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
                     }
                     Container {
                         topPadding: 10.0; bottomPadding: 10.0
                         layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                         Label { text: "3"; minWidth: 52.0; textStyle.fontWeight: FontWeight.Bold; textStyle.color: Color.create("#ff48a7e8") }
-                        Label { text: "Confronta il PIN e accetta sul BlackBerry."; multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
+                        Label { text: qsTr("Confronta il PIN e accetta sul BlackBerry."); multiline: true; layoutProperties: StackLayoutProperties { spaceQuota: 1.0 } }
                     }
 
-                    Header { title: "Destinazione" }
+                    Header { title: qsTr("Destinazione") }
                     Label {
                         text: "File Manager  /  downloads  /  BBXShare"
                         multiline: true
@@ -244,7 +244,7 @@ Page {
                         textStyle.color: Color.LightGray
                     }
                     Label {
-                        text: "Tocca un file ricevuto in Attivit\u00e0 per aprire la sua cartella nel File Manager."
+                        text: qsTr("Tocca un file ricevuto in Attivit\u00e0 per aprire la sua cartella nel File Manager.")
                         multiline: true
                         textStyle.base: SystemDefaults.TextStyles.SmallText
                         textStyle.color: Color.LightGray
@@ -260,23 +260,25 @@ Page {
             Container {
                 horizontalAlignment: HorizontalAlignment.Fill
                 bottomPadding: 36.0
-                Header { title: "Invia" }
+                Header { title: qsTr("Invia") }
                 Container {
                     leftPadding: 24.0
                     rightPadding: 24.0
                     topPadding: 20.0
                     Label {
-                        text: "Scegli un file"
+                        text: qsTr("Scegli un file")
                         textStyle.base: SystemDefaults.TextStyles.SubtitleText
                         textStyle.fontWeight: FontWeight.Bold
                     }
-                    Label {
-                        text: "Puoi selezionarlo qui oppure usare Condividi da File Manager, Foto e dalle altre app BB10."
-                        multiline: true
-                        textStyle.color: Color.LightGray
+                    Button {
+                        visible: !share.outgoingReady
+                        text: qsTr("Apri File Picker")
+                        horizontalAlignment: HorizontalAlignment.Fill
+                        onClicked: outgoingPicker.open()
                     }
                     Button {
-                        text: share.outgoingReady ? "Scegli un altro file" : "Apri File Picker"
+                        visible: share.outgoingReady
+                        text: qsTr("Scegli un altro file")
                         horizontalAlignment: HorizontalAlignment.Fill
                         onClicked: outgoingPicker.open()
                     }
@@ -290,15 +292,12 @@ Page {
                         topPadding: 18.0
                         bottomPadding: 18.0
                         background: Color.create("#ff1d252d")
-                        layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
-                        Container {
-                            layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
-                            Label { text: share.outgoingName; multiline: true; textStyle.fontWeight: FontWeight.Bold }
-                            Label { text: share.outgoingDetail; textStyle.base: SystemDefaults.TextStyles.SmallText; textStyle.color: Color.LightGray }
-                        }
+                        Label { text: share.outgoingName; multiline: true; textStyle.fontWeight: FontWeight.Bold }
+                        Label { text: share.outgoingDetail; textStyle.base: SystemDefaults.TextStyles.SmallText; textStyle.color: Color.LightGray }
                         Button {
-                            text: "Rimuovi"
+                            text: qsTr("Rimuovi")
                             enabled: !share.sendActive
+                            horizontalAlignment: HorizontalAlignment.Fill
                             onClicked: share.clearOutgoingFile()
                         }
                     }
@@ -316,8 +315,8 @@ Page {
                         Container {
                             layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                             Label {
-                                text: share.sendActive ? "Trasferimento in corso" :
-                                      (share.sendFailed ? "Invio non riuscito" : "Stato invio")
+                                text: share.sendActive ? qsTr("Trasferimento in corso") :
+                                      (share.sendFailed ? qsTr("Invio non riuscito") : qsTr("Stato invio"))
                                 textStyle.fontWeight: FontWeight.Bold
                                 layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                             }
@@ -347,15 +346,17 @@ Page {
                         }
                     }
 
-                    Header { title: "Dispositivi vicini" }
+                    Header { title: qsTr("Dispositivi vicini"); visible: share.outgoingReady }
                     Label {
-                        text: "Cerca i receiver Quick Share disponibili sulla stessa Wi-Fi."
+                        visible: share.outgoingReady
+                        text: qsTr("Cerca i receiver Quick Share disponibili sulla stessa Wi-Fi.")
                         multiline: true
                         textStyle.base: SystemDefaults.TextStyles.SmallText
                         textStyle.color: Color.LightGray
                     }
                     Button {
-                        text: share.scanning ? "Ricerca in corso…" : "Cerca dispositivi"
+                        visible: share.outgoingReady
+                        text: share.scanning ? qsTr("Ricerca in corso…") : qsTr("Cerca dispositivi")
                         enabled: !share.scanning && !share.sendActive
                         horizontalAlignment: HorizontalAlignment.Fill
                         onClicked: share.scanDevices()
@@ -366,20 +367,25 @@ Page {
                         horizontalAlignment: HorizontalAlignment.Center
                     }
                     Label {
-                        visible: !share.scanning && share.devicesEmpty
-                        text: "Nessun device trovato. Attiva Quick Share sul telefono e riprova."
+                        visible: share.outgoingReady && !share.scanning && share.devicesEmpty
+                        text: qsTr("Nessun device trovato. Attiva Quick Share sul telefono e riprova.")
                         multiline: true
                         textStyle.base: SystemDefaults.TextStyles.SmallText
                         textStyle.color: Color.LightGray
                     }
-                    ListView {
-                        visible: !share.devicesEmpty
+                    Container {
+                        visible: share.outgoingReady && !share.devicesEmpty
                         horizontalAlignment: HorizontalAlignment.Fill
-                        maxHeight: 240.0
-                        dataModel: share.devices
+                        preferredHeight: 240.0
+                        clipContentToBounds: true
+                        ListView {
+                            horizontalAlignment: HorizontalAlignment.Fill
+                            verticalAlignment: VerticalAlignment.Fill
+                            dataModel: share.devices
                         onTriggered: {
                             var device = dataModel.data(indexPath)
-                            share.selectDevice(device.address, device.port, device.name)
+                            share.selectDevice(device.address, device.port,
+                                               device.name, device.instance)
                         }
                         listItemComponents: [
                             ListItemComponent {
@@ -396,7 +402,7 @@ Page {
                                             layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                                             Label { text: ListItemData.name; textStyle.fontWeight: FontWeight.Bold }
                                             Label {
-                                                text: "Quick Share · " + ListItemData.address
+                                                text: qsTr("Quick Share · %1").arg(ListItemData.address)
                                                 textStyle.base: SystemDefaults.TextStyles.SmallText
                                                 textStyle.color: Color.LightGray
                                             }
@@ -411,6 +417,7 @@ Page {
                                 }
                             }
                         ]
+                        }
                     }
                     Container {
                         visible: share.deviceReady
@@ -422,56 +429,31 @@ Page {
                         bottomPadding: 16.0
                         background: Color.create("#ff173047")
                         Label {
-                            text: "Destinatario: " + share.selectedDeviceName
+                            text: qsTr("Destinatario: %1").arg(share.selectedDeviceName)
                             multiline: true
                             textStyle.fontWeight: FontWeight.Bold
                             textStyle.color: Color.create("#ff75c5ff")
                         }
                         Label {
-                            text: "Pronto sulla rete Wi-Fi"
+                            text: qsTr("Pronto sulla rete Wi-Fi")
                             textStyle.base: SystemDefaults.TextStyles.SmallText
                             textStyle.color: Color.LightGray
                         }
                         Button {
-                            text: share.sendActive ? "Invio in corso…" :
-                                  (share.outgoingReady ? "Invia " + share.outgoingName : "Scegli prima un file")
+                            text: share.sendActive ? qsTr("Invio in corso…") :
+                                  (share.outgoingReady ? qsTr("Invia %1").arg(share.outgoingName) : qsTr("Scegli prima un file"))
                             enabled: share.outgoingReady && !share.transferActive && !share.sendActive
                             horizontalAlignment: HorizontalAlignment.Fill
                             onClicked: share.sendOutgoing()
                         }
                         Button {
-                            text: "Cambia dispositivo"
+                            text: qsTr("Cambia dispositivo")
                             enabled: !share.sendActive
                             horizontalAlignment: HorizontalAlignment.Fill
                             onClicked: {
                                 share.clearDeviceSelection()
                                 share.scanDevices()
                             }
-                        }
-                    }
-
-                    Header { title: "Quick Share verso Android" }
-                    Label {
-                        text: share.outgoingReady ?
-                              "File pronto. Cerca un dispositivo vicino, selezionalo e avvia l’invio cifrato." :
-                              "Seleziona un file per preparare il trasferimento."
-                        multiline: true
-                        textStyle.color: Color.LightGray
-                    }
-                    Container {
-                        topMargin: 16.0
-                        horizontalAlignment: HorizontalAlignment.Fill
-                        leftPadding: 20.0
-                        rightPadding: 20.0
-                        topPadding: 16.0
-                        bottomPadding: 16.0
-                        background: Color.create("#ff173047")
-                        Label { text: "Integrazione BB10 attiva"; textStyle.fontWeight: FontWeight.Bold; textStyle.color: Color.create("#ff75c5ff") }
-                        Label {
-                            text: "BBX Share \u00e8 registrata come destinazione nativa per bb.action.SHARE."
-                            multiline: true
-                            textStyle.base: SystemDefaults.TextStyles.SmallText
-                            textStyle.color: Color.LightGray
                         }
                     }
                 }
@@ -487,19 +469,19 @@ Page {
             topPadding: 22.0
             bottomPadding: 22.0
             background: Color.create("#ff27343f")
-            Label { text: "RICHIESTA QUICK SHARE"; textStyle.base: SystemDefaults.TextStyles.SmallText; textStyle.color: Color.create("#ff65b5ff") }
+            Label { text: qsTr("RICHIESTA QUICK SHARE"); textStyle.base: SystemDefaults.TextStyles.SmallText; textStyle.color: Color.create("#ff65b5ff") }
             Label { text: share.pendingTitle; multiline: true; textStyle.base: SystemDefaults.TextStyles.SubtitleText; textStyle.fontWeight: FontWeight.Bold }
             Label { text: share.pendingDetail; multiline: true; textStyle.base: SystemDefaults.TextStyles.SmallText; textStyle.color: Color.LightGray }
             Container {
                 topPadding: 14.0
                 layout: StackLayout { orientation: LayoutOrientation.LeftToRight }
                 Button {
-                    text: "Rifiuta"
+                    text: qsTr("Rifiuta")
                     layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                     onClicked: share.rejectTransfer()
                 }
                 Button {
-                    text: "Accetta"
+                    text: qsTr("Accetta")
                     layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                     onClicked: share.acceptTransfer()
                 }
@@ -510,14 +492,14 @@ Page {
     attachedObjects: [
         FilePicker {
             id: outgoingPicker
-            title: "Scegli il file da inviare"
-            mode: FilePickerMode.Picker
+            title: qsTr("Scegli uno o più file da inviare")
+            mode: FilePickerMode.PickerMultiple
             viewMode: FilePickerViewMode.ListView
             filter: ["*"]
             directories: ["/accounts/1000/shared"]
             onFileSelected: {
                 if (selectedFiles.length > 0) {
-                    share.selectOutgoingFile(selectedFiles[0])
+                    share.selectOutgoingFiles(selectedFiles)
                     appPage.currentSection = "send"
                     if (!share.scanning && share.devicesEmpty)
                         share.scanDevices()

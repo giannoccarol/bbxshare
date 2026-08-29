@@ -5,11 +5,17 @@
 
 #include <QtCore/QByteArray>
 #include <QtCore/QAtomicInt>
+#include <QtCore/QDate>
+#include <QtCore/QDateTime>
+#include <QtCore/QDir>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QMetaObject>
+#include <QtCore/QSettings>
 #include <QtCore/QUrl>
 #include <QtCore/QSet>
+#include <QtCore/QStringList>
+#include <QtCore/QTimer>
 
 #include <bb/system/InvokeManager>
 #include <bb/system/InvokeReply>
@@ -48,10 +54,10 @@ namespace {
 
 const int     MDNS_PORT    = 5353;
 const quint32 RECORD_TTL   = 120;
+const quint32 LEGACY_RECORD_TTL = 10;
 const int     ANNOUNCE_STEADY_MS = 4000;
 const int     BLE_WAKE_THROTTLE_MS = 2500;
 const char SERVICE_TYPE[] = "_FC9F5ED42C8A._tcp.local";
-const char HOST_LABEL[]   = "bbxshare";
 const char DEVICE_NAME_BASE[] = "BBX Share";
 
 const quint16 QTYPE_A   = 1;
@@ -62,6 +68,7 @@ const quint16 QTYPE_ANY = 255;
 
 struct ShareCtx {
     QByteArray instanceLabel;   // base64 url-safe, senza padding
+    QByteArray hostLabel;       // univoco per processo, evita bbxshare.local condiviso
     QByteArray endpointInfoB64; // valore TXT "n"
     QByteArray deviceName;
     quint16 tcpPort;
@@ -78,12 +85,21 @@ struct ShareCtx {
     qint64 lastBleWakeMs;
     bool bleWakeActive;
     qint64 nextBleInitMs;
-    QHash<QString, QString> scanSeen;
-    QSet<QByteArray> discoveredInstances;
+    qint64 nextIpCheckMs;
+    QHash<QByteArray, qint64> discoveredInstanceExpiry;
     QHash<QByteArray, QByteArray> discoveredSrvHosts;
+    QHash<QByteArray, qint64> discoveredSrvExpiry;
     QHash<QByteArray, QByteArray> discoveredTxts;
+    QHash<QByteArray, qint64> discoveredTxtExpiry;
     QHash<QByteArray, QByteArray> discoveredAddresses;
+    QHash<QByteArray, qint64> discoveredAddressExpiry;
     QHash<QByteArray, int> discoveredSrvPorts;
+    QHash<QByteArray, qint64> followupQueries;
+    QByteArray publishedDeviceSignature;
+    // IP (network order) -> scadenza. Chi ha fatto una query mDNS: riceve
+    // anche le copie unicast degli announce, il multicast e' spesso
+    // filtrato dal Wi-Fi power save dei telefoni.
+    QHash<quint32, qint64> recentQueriers;
 };
 
 qint64 monotonicMs()
@@ -125,16 +141,6 @@ void postStatus(ShareCtx *ctx, const QString &msg)
 }
 
 // evento visibile nella lista della UI (main thread via coda)
-void postEvent(ShareCtx *ctx, const QString &title, const QString &detail)
-{
-#ifdef HOST_TRACE
-    fprintf(stderr, "[share] %s - %s\n", title.toUtf8().constData(),
-            detail.toUtf8().constData());
-#endif
-    QMetaObject::invokeMethod(ctx->svc, "appendEvent", Qt::QueuedConnection,
-                              Q_ARG(QString, title), Q_ARG(QString, detail));
-}
-
 // base64 URL-safe senza padding (come NearDrop/rquickshare)
 QByteArray urlSafeB64(const unsigned char *data, int len)
 {
@@ -151,6 +157,27 @@ QByteArray urlSafeB64(const unsigned char *data, int len)
         if (i + 2 < len) out.append(alpha[b2 & 63]);
     }
     return out;
+}
+
+void generateDnsIdentity(ShareCtx *ctx)
+{
+    static const char *alpha =
+        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    unsigned char id[4];
+    for (int i = 0; i < 4; ++i)
+        id[i] = (unsigned char)alpha[rand() % 62];
+    unsigned char nearbyName[10] = {
+        0x23, id[0], id[1], id[2], id[3], 0xFC, 0x9F, 0x5E, 0, 0
+    };
+    ctx->instanceLabel = urlSafeB64(nearbyName, 10);
+
+    static const char hex[] = "0123456789abcdef";
+    ctx->hostLabel = "bbxshare-";
+    for (int i = 0; i < 8; ++i) {
+        const unsigned char value = (unsigned char)(rand() & 0xff);
+        ctx->hostLabel.append(hex[value >> 4]);
+        ctx->hostLabel.append(hex[value & 15]);
+    }
 }
 
 // "a.b.c" -> label DNS length-prefixed + root
@@ -171,17 +198,24 @@ QByteArray dnsName(const QByteArray &fqdn)
     return out;
 }
 
-QByteArray discoveryQuery()
+QByteArray recordQuery(const QByteArray &name, quint16 queryType)
 {
     QByteArray packet(12, '\0');
     packet[5] = 1; // one question
-    packet.append(dnsName(QByteArray(SERVICE_TYPE)));
-    quint16 type = htons(QTYPE_PTR);
+    packet.append(dnsName(name));
+    quint16 type = htons(queryType);
     quint16 klass = htons(1);
     packet.append((const char *)&type, 2);
     packet.append((const char *)&klass, 2);
     return packet;
 }
+
+QByteArray discoveryQuery()
+{
+    return recordQuery(QByteArray(SERVICE_TYPE), QTYPE_PTR);
+}
+
+void sendMulticast(int udp, const QByteArray &pkt);
 
 bool readDnsName(const unsigned char *buf, int size, int *position,
                  QByteArray *name)
@@ -214,6 +248,60 @@ bool readDnsName(const unsigned char *buf, int size, int *position,
     return false;
 }
 
+bool packetContainsOwner(const unsigned char *buf, int size,
+                         const QByteArray &owner)
+{
+    if (size < 12 || !(buf[2] & 0x80)) return false;
+    const int questions = ((int)buf[4] << 8) | buf[5];
+    const int records = (((int)buf[6] << 8) | buf[7]) +
+                        (((int)buf[8] << 8) | buf[9]) +
+                        (((int)buf[10] << 8) | buf[11]);
+    int pos = 12;
+    QByteArray name;
+    for (int i = 0; i < questions; ++i) {
+        if (!readDnsName(buf, size, &pos, &name) || pos + 4 > size) return false;
+        pos += 4;
+    }
+    for (int i = 0; i < records; ++i) {
+        if (!readDnsName(buf, size, &pos, &name) || pos + 10 > size) return false;
+        const int length = ((int)buf[pos + 8] << 8) | buf[pos + 9];
+        if (name == owner) return true;
+        pos += 10 + length;
+        if (pos > size) return false;
+    }
+    return false;
+}
+
+bool probeDnsIdentity(ShareCtx *ctx, int udp)
+{
+    const QByteArray instance =
+        (ctx->instanceLabel + "." + SERVICE_TYPE).toLower();
+    const QByteArray host = (ctx->hostLabel + ".local").toLower();
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        sendMulticast(udp, recordQuery(instance, QTYPE_ANY));
+        sendMulticast(udp, recordQuery(host, QTYPE_ANY));
+        const qint64 deadline = monotonicMs() + 250;
+        while (monotonicMs() < deadline) {
+            struct pollfd pfd;
+            pfd.fd = udp;
+            pfd.events = POLLIN;
+            pfd.revents = 0;
+            const int waitMs = (int)qMax<qint64>(1, deadline - monotonicMs());
+            const int ready = poll(&pfd, 1, waitMs);
+            if (ready <= 0) break;
+            unsigned char packet[4096];
+            struct sockaddr_in source;
+            socklen_t sourceLength = sizeof(source);
+            const int size = recvfrom(udp, packet, sizeof(packet), 0,
+                                      (struct sockaddr *)&source, &sourceLength);
+            if (packetContainsOwner(packet, size, instance) ||
+                packetContainsOwner(packet, size, host))
+                return false;
+        }
+    }
+    return true;
+}
+
 QByteArray decodeEndpointInfo(const QByteArray &txt)
 {
     QByteArray value = txt;
@@ -223,20 +311,131 @@ QByteArray decodeEndpointInfo(const QByteArray &txt)
     return QByteArray::fromBase64(value);
 }
 
-void postDevice(ShareCtx *ctx, const QString &name,
-                const QString &address, int port)
+qint64 recordExpiry(qint64 now, quint32 ttl)
 {
-    const QString key = address + QLatin1String(":") + QString::number(port);
-    if (ctx->scanSeen.value(key) == name) return;
-    ctx->scanSeen.insert(key, name);
-    QMetaObject::invokeMethod(ctx->svc, "addDevice", Qt::QueuedConnection,
-                              Q_ARG(QString, name), Q_ARG(QString, address),
-                              Q_ARG(int, port));
+    const quint32 boundedTtl = qMin<quint32>(ttl, 24U * 60U * 60U);
+    return now + (qint64)boundedTtl * 1000;
 }
 
-void parseDiscoveryPacket(ShareCtx *ctx, const unsigned char *buf, int size)
+bool expireDiscoveryRecords(ShareCtx *ctx, qint64 now)
 {
-    if (!ctx->scanActive || size < 12) return;
+    bool changed = false;
+    QHash<QByteArray, qint64>::iterator it;
+    for (it = ctx->discoveredInstanceExpiry.begin();
+         it != ctx->discoveredInstanceExpiry.end();) {
+        if (it.value() <= now) {
+            const QByteArray key = it.key();
+            it = ctx->discoveredInstanceExpiry.erase(it);
+            ctx->discoveredSrvHosts.remove(key);
+            ctx->discoveredSrvPorts.remove(key);
+            ctx->discoveredSrvExpiry.remove(key);
+            ctx->discoveredTxts.remove(key);
+            ctx->discoveredTxtExpiry.remove(key);
+            changed = true;
+        } else ++it;
+    }
+    for (it = ctx->discoveredSrvExpiry.begin(); it != ctx->discoveredSrvExpiry.end();) {
+        if (it.value() <= now) {
+            const QByteArray key = it.key();
+            it = ctx->discoveredSrvExpiry.erase(it);
+            ctx->discoveredSrvHosts.remove(key);
+            ctx->discoveredSrvPorts.remove(key);
+            changed = true;
+        } else ++it;
+    }
+    for (it = ctx->discoveredTxtExpiry.begin(); it != ctx->discoveredTxtExpiry.end();) {
+        if (it.value() <= now) {
+            const QByteArray key = it.key();
+            it = ctx->discoveredTxtExpiry.erase(it);
+            ctx->discoveredTxts.remove(key);
+            changed = true;
+        } else ++it;
+    }
+    for (it = ctx->discoveredAddressExpiry.begin();
+         it != ctx->discoveredAddressExpiry.end();) {
+        if (it.value() <= now) {
+            const QByteArray key = it.key();
+            it = ctx->discoveredAddressExpiry.erase(it);
+            ctx->discoveredAddresses.remove(key);
+            changed = true;
+        } else ++it;
+    }
+    return changed;
+}
+
+void publishDiscoveredDevices(ShareCtx *ctx)
+{
+    QStringList orderedInstances;
+    QHash<QByteArray, qint64>::const_iterator keyIt =
+        ctx->discoveredInstanceExpiry.constBegin();
+    for (; keyIt != ctx->discoveredInstanceExpiry.constEnd(); ++keyIt)
+        orderedInstances.append(QString::fromLatin1(keyIt.key()));
+    orderedInstances.sort();
+
+    QVariantList rows;
+    QByteArray signature;
+    for (int i = 0; i < orderedInstances.size(); ++i) {
+        const QByteArray instance = orderedInstances.at(i).toLatin1();
+        const QByteArray host = ctx->discoveredSrvHosts.value(instance);
+        const QByteArray ip = ctx->discoveredAddresses.value(host);
+        const int port = ctx->discoveredSrvPorts.value(instance, 0);
+        if (host.isEmpty() || ip.size() != 4 || port <= 0) continue;
+        if (ctx->localIp && memcmp(ip.constData(), &ctx->localIp, 4) == 0)
+            continue;
+
+        char ipText[INET_ADDRSTRLEN] = {0};
+        if (!inet_ntop(AF_INET, ip.constData(), ipText, sizeof(ipText)))
+            continue;
+        const QByteArray endpoint =
+            decodeEndpointInfo(ctx->discoveredTxts.value(instance));
+        const QString deviceName = BbxDiscovery::endpointDisplayName(endpoint);
+        QVariantMap row;
+        row["instance"] = QString::fromLatin1(instance);
+        row["name"] = deviceName;
+        row["address"] = QString::fromLatin1(ipText);
+        row["port"] = port;
+        rows.append(row);
+        signature.append(instance).append('|').append(deviceName.toUtf8())
+                 .append('|').append(ipText).append('|')
+                 .append(QByteArray::number(port)).append('\n');
+    }
+    if (signature == ctx->publishedDeviceSignature) return;
+    ctx->publishedDeviceSignature = signature;
+    QMetaObject::invokeMethod(ctx->svc, "syncDevices", Qt::QueuedConnection,
+                              Q_ARG(QVariantList, rows));
+}
+
+void sendFollowupQuery(ShareCtx *ctx, int udp, const QByteArray &name,
+                       quint16 type, qint64 now)
+{
+    const QByteArray key = QByteArray::number(type) + ':' + name;
+    if (ctx->followupQueries.value(key, 0) > now) return;
+    ctx->followupQueries.insert(key, now + 1000);
+    sendMulticast(udp, recordQuery(name, type));
+}
+
+void sendResolutionQueries(ShareCtx *ctx, int udp, qint64 now)
+{
+    QHash<QByteArray, qint64>::const_iterator it =
+        ctx->discoveredInstanceExpiry.constBegin();
+    for (; it != ctx->discoveredInstanceExpiry.constEnd(); ++it) {
+        const QByteArray instance = it.key();
+        if (!ctx->discoveredSrvHosts.contains(instance))
+            sendFollowupQuery(ctx, udp, instance, QTYPE_SRV, now);
+        if (!ctx->discoveredTxts.contains(instance))
+            sendFollowupQuery(ctx, udp, instance, QTYPE_TXT, now);
+        const QByteArray host = ctx->discoveredSrvHosts.value(instance);
+        if (!host.isEmpty() && !ctx->discoveredAddresses.contains(host))
+            sendFollowupQuery(ctx, udp, host, QTYPE_A, now);
+    }
+}
+
+void parseDiscoveryPacket(ShareCtx *ctx, int udp,
+                          const unsigned char *buf, int size)
+{
+    if (size < 12) return;
+    const qint64 now = monotonicMs();
+    bool changed = expireDiscoveryRecords(ctx, now);
     const int questions = ((int)buf[4] << 8) | buf[5];
     const int answers = ((int)buf[6] << 8) | buf[7];
     const int authorities = ((int)buf[8] << 8) | buf[9];
@@ -255,69 +454,88 @@ void parseDiscoveryPacket(ShareCtx *ctx, const unsigned char *buf, int size)
         const quint16 type = ((quint16)buf[pos] << 8) | buf[pos + 1];
         pos += 2;
         pos += 2; // class
-        pos += 4; // ttl
+        const quint32 ttl = ((quint32)buf[pos] << 24) |
+                            ((quint32)buf[pos + 1] << 16) |
+                            ((quint32)buf[pos + 2] << 8) | buf[pos + 3];
+        pos += 4;
         const quint16 length = ((quint16)buf[pos] << 8) | buf[pos + 1];
         pos += 2;
         if (pos + length > size) return;
         const int rdata = pos;
-        if (type == QTYPE_PTR) {
+        if (type == QTYPE_PTR && name == QByteArray(SERVICE_TYPE).toLower()) {
             int p = rdata;
             QByteArray target;
-            if (readDnsName(buf, size, &p, &target))
-                ctx->discoveredInstances.insert(target);
-        } else if (type == QTYPE_SRV && length >= 6) {
+            if (readDnsName(buf, size, &p, &target)) {
+                if (ttl == 0) {
+                    ctx->discoveredInstanceExpiry.remove(target);
+                    ctx->discoveredSrvHosts.remove(target);
+                    ctx->discoveredSrvPorts.remove(target);
+                    ctx->discoveredSrvExpiry.remove(target);
+                    ctx->discoveredTxts.remove(target);
+                    ctx->discoveredTxtExpiry.remove(target);
+                } else {
+                    ctx->discoveredInstanceExpiry.insert(target,
+                                                         recordExpiry(now, ttl));
+                }
+                changed = true;
+            }
+        } else if (type == QTYPE_SRV && length >= 6 &&
+                   name.endsWith('.' + QByteArray(SERVICE_TYPE).toLower())) {
             int p = rdata + 6;
             QByteArray target;
             if (readDnsName(buf, size, &p, &target)) {
-                ctx->discoveredSrvHosts.insert(name, target);
-                ctx->discoveredSrvPorts.insert(
-                    name, ((int)buf[rdata + 4] << 8) | buf[rdata + 5]);
+                if (ttl == 0) {
+                    ctx->discoveredSrvHosts.remove(name);
+                    ctx->discoveredSrvPorts.remove(name);
+                    ctx->discoveredSrvExpiry.remove(name);
+                } else {
+                    ctx->discoveredSrvHosts.insert(name, target);
+                    ctx->discoveredSrvPorts.insert(
+                        name, ((int)buf[rdata + 4] << 8) | buf[rdata + 5]);
+                    ctx->discoveredSrvExpiry.insert(name, recordExpiry(now, ttl));
+                }
+                changed = true;
             }
-        } else if (type == QTYPE_TXT) {
+        } else if (type == QTYPE_TXT &&
+                   name.endsWith('.' + QByteArray(SERVICE_TYPE).toLower())) {
+            if (ttl == 0) {
+                ctx->discoveredTxts.remove(name);
+                ctx->discoveredTxtExpiry.remove(name);
+                changed = true;
+                pos = rdata + length;
+                continue;
+            }
             int p = rdata;
             const int end = rdata + length;
             while (p < end) {
                 const int n = (unsigned char)buf[p++];
                 if (p + n > end) break;
                 QByteArray entry((const char *)buf + p, n);
-                if (entry.startsWith("n="))
+                if (entry.startsWith("n=")) {
                     ctx->discoveredTxts.insert(name, entry.mid(2));
+                    ctx->discoveredTxtExpiry.insert(name, recordExpiry(now, ttl));
+                    changed = true;
+                }
                 p += n;
             }
         } else if (type == QTYPE_A && length == 4) {
-            ctx->discoveredAddresses.insert(
-                name, QByteArray((const char *)buf + rdata, 4));
+            if (ttl == 0) {
+                ctx->discoveredAddresses.remove(name);
+                ctx->discoveredAddressExpiry.remove(name);
+            } else {
+                ctx->discoveredAddresses.insert(
+                    name, QByteArray((const char *)buf + rdata, 4));
+                ctx->discoveredAddressExpiry.insert(name, recordExpiry(now, ttl));
+            }
+            changed = true;
         }
         pos = rdata + length;
     }
-
-    QSet<QByteArray>::const_iterator it = ctx->discoveredInstances.constBegin();
-    for (; it != ctx->discoveredInstances.constEnd(); ++it) {
-        const QByteArray instance = *it;
-        const QByteArray host = ctx->discoveredSrvHosts.value(instance);
-        const QByteArray ip = ctx->discoveredAddresses.value(host);
-        const int port = ctx->discoveredSrvPorts.value(instance, 0);
-        if (host.isEmpty() || ip.size() != 4 || port <= 0) continue;
-        char ipText[INET_ADDRSTRLEN] = {0};
-        inet_ntop(AF_INET, ip.constData(), ipText, sizeof(ipText));
-        // Non mostrare mai il nome istanza mDNS: e' un token Base64 tecnico,
-        // non un nome destinato all'utente.
-        QString deviceName;
-        const QByteArray encoded = ctx->discoveredTxts.value(instance);
-        const QByteArray endpoint = decodeEndpointInfo(encoded);
-        // Il nome dell'endpoint e' opzionale sui record Android 17 da 17 byte.
-        // In quel caso usa un'etichetta leggibile, mai il token mDNS.
-        deviceName = BbxDiscovery::endpointDisplayName(endpoint);
-        // Ignora l'annuncio locale tramite indirizzo, non tramite display name:
-        // due BlackBerry eseguono legittimamente entrambi BBX Share.
-        if (ctx->localIp && ip.size() == 4 &&
-            memcmp(ip.constData(), &ctx->localIp, 4) == 0)
-            continue;
-        postDevice(ctx, deviceName, QString::fromLatin1(ipText), port);
-    }
+    sendResolutionQueries(ctx, udp, now);
+    if (changed) publishDiscoveredDevices(ctx);
 }
 
-// ponytail: IP della route di default calcolato una volta sola; ricalcolare se la rete cambia
+// ponytail: IP della route di default, ricalcolato ogni 10s in refreshLocalIp()
 quint32 detectLocalIp()
 {
     quint32 ip = 0;
@@ -356,11 +574,13 @@ void appendRecord(QByteArray &pkt, const QByteArray &name, quint16 type,
 
 QByteArray buildResponse(ShareCtx *ctx, int id, bool cacheFlush,
                          bool answerPtr, const QByteArray &ptrName,
-                         bool answerSrv, bool answerTxt, bool answerA)
+                         bool answerSrv, bool answerTxt, bool answerA,
+                         const QByteArray &question = QByteArray(),
+                         quint32 ttl = RECORD_TTL)
 {
     const QByteArray typeDn = dnsName(SERVICE_TYPE);
     const QByteArray instDn = dnsName(ctx->instanceLabel + "." + SERVICE_TYPE);
-    const QByteArray hostDn = dnsName(QByteArray(HOST_LABEL) + ".local");
+    const QByteArray hostDn = dnsName(ctx->hostLabel + ".local");
 
     QByteArray srvRd;
     quint16 zero = 0, port = htons(ctx->tcpPort);
@@ -378,10 +598,11 @@ QByteArray buildResponse(ShareCtx *ctx, int id, bool cacheFlush,
 
     QByteArray pkt;
     pkt.append(QByteArray(12, '\0')); // header placeholder
+    pkt.append(question);
 
     quint16 an = 0, ar = 0;
     if (answerPtr) {
-        appendRecord(pkt, ptrName, QTYPE_PTR, false, RECORD_TTL, instDn);
+        appendRecord(pkt, ptrName, QTYPE_PTR, false, ttl, instDn);
         ++an;
     }
     // SRV/TXT/A: come risposte se direttamente richiesti, altrimenti additional
@@ -395,7 +616,7 @@ QByteArray buildResponse(ShareCtx *ctx, int id, bool cacheFlush,
             bool asAnswer = recs[i].want;
             if ((pass == 0) == asAnswer) {
                 appendRecord(pkt, *recs[i].name, recs[i].type, cacheFlush,
-                             RECORD_TTL, *recs[i].rd);
+                             ttl, *recs[i].rd);
                 if (asAnswer) ++an; else ++ar;
             }
         }
@@ -405,6 +626,8 @@ QByteArray buildResponse(ShareCtx *ctx, int id, bool cacheFlush,
     memcpy(pkt.data(), &v, 2);
     v = htons(0x8400); // QR=1, AA=1
     memcpy(pkt.data() + 2, &v, 2);
+    v = htons(question.isEmpty() ? 0 : 1);
+    memcpy(pkt.data() + 4, &v, 2);
     v = htons(an);
     memcpy(pkt.data() + 6, &v, 2);
     v = htons(ar);
@@ -427,12 +650,60 @@ void sendAnnounce(ShareCtx *ctx, int udp)
     QByteArray pkt = buildResponse(ctx, 0, true, true, dnsName(SERVICE_TYPE),
                                    false, false, false);
     sendMulticast(udp, pkt);
+    // Copie unicast ai querier recenti: il power save Wi-Fi dei telefoni
+    // Android scarta il multicast, l'unicast arriva sempre.
+    const qint64 now = monotonicMs();
+    for (QHash<quint32, qint64>::iterator it = ctx->recentQueriers.begin();
+         it != ctx->recentQueriers.end();) {
+        if (it.value() < now) {
+            it = ctx->recentQueriers.erase(it);
+            continue;
+        }
+        struct sockaddr_in peer;
+        memset(&peer, 0, sizeof(peer));
+        peer.sin_family = AF_INET;
+        peer.sin_port = htons(MDNS_PORT);
+        peer.sin_addr.s_addr = it.key();
+        sendto(udp, pkt.constData(), pkt.size(), 0,
+               (struct sockaddr *)&peer, sizeof(peer));
+        ++it;
+    }
 }
 
 void armAnnounceBurst(ShareCtx *ctx, qint64 now)
 {
     ctx->announceBurstLeft = 4;
     ctx->nextAnnounceMs = now + 120;
+}
+
+// L'IP della route di default puo' non essere pronto all'avvio dell'app
+// (Wi-Fi in fase di associazione) o cambiare a runtime: verificato ogni 10s.
+void refreshLocalIp(ShareCtx *ctx, int udp, qint64 now)
+{
+    const quint32 ip = detectLocalIp();
+    if (ip == ctx->localIp) return;
+
+    if (ctx->localIp) {
+        struct ip_mreq drop;
+        memset(&drop, 0, sizeof(drop));
+        drop.imr_multiaddr.s_addr = inet_addr("224.0.0.251");
+        drop.imr_interface.s_addr = ctx->localIp;
+        setsockopt(udp, IPPROTO_IP, IP_DROP_MEMBERSHIP, &drop, sizeof(drop));
+    }
+    ctx->localIp = ip;
+    if (!ip) return;
+
+    struct ip_mreq mr;
+    memset(&mr, 0, sizeof(mr));
+    mr.imr_multiaddr.s_addr = inet_addr("224.0.0.251");
+    mr.imr_interface.s_addr = ip;
+    if (setsockopt(udp, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) != 0)
+        postStatus(ctx, QObject::tr("Attenzione: join multicast fallita: %1")
+                            .arg(strerror(errno)));
+    setsockopt(udp, IPPROTO_IP, IP_MULTICAST_IF, &ip, sizeof(ip));
+    postStatus(ctx, QObject::tr("IP locale aggiornato: %1")
+                        .arg(QString::fromUtf8(inet_ntoa(*((struct in_addr *)&ip)))));
+    armAnnounceBurst(ctx, now);
 }
 
 #ifdef Q_OS_BLACKBERRY
@@ -467,7 +738,7 @@ void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
 {
     if (n < 12) return; // malformato
     if (buf[2] & 0x80) {
-        parseDiscoveryPacket(ctx, buf, n);
+        parseDiscoveryPacket(ctx, udp, buf, n);
         return; // risposta mDNS: non è una query da rispondere
     }
     unsigned qd = ((unsigned)buf[4] << 8) | buf[5];
@@ -475,7 +746,7 @@ void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
 
     const QByteArray typeL = QByteArray(SERVICE_TYPE).toLower();
     const QByteArray instL = ctx->instanceLabel.toLower() + "." + typeL;
-    const QByteArray hostL = QByteArray(HOST_LABEL).toLower() + ".local";
+    const QByteArray hostL = ctx->hostLabel.toLower() + ".local";
 
     bool legacy = ntohs(src.sin_port) != MDNS_PORT;
     int id = ((int)buf[0] << 8) | buf[1];
@@ -508,16 +779,29 @@ void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
         if (!wantPtr && !wantSrv && !wantTxt && !wantA) continue;
 
         QByteArray ptrName((const char *)buf + start, pos - 4 - start);
+        QByteArray question((const char *)buf + start, pos - start);
         const bool wantsUnicast = (qclass & 0x8000) != 0;
         QByteArray pkt = buildResponse(ctx, legacy ? id : 0, !legacy,
-                                       wantPtr, ptrName, wantSrv, wantTxt, wantA);
-        if (legacy || wantsUnicast)
+                                       wantPtr, ptrName, wantSrv, wantTxt, wantA,
+                                       legacy ? question : QByteArray(),
+                                       legacy ? LEGACY_RECORD_TTL : RECORD_TTL);
+        if (legacy || wantsUnicast) {
             sendto(udp, pkt.constData(), pkt.size(), 0,
                    (struct sockaddr *)&src, sizeof(src));
-        else
+        } else {
             sendMulticast(udp, pkt);
+            // Stessa risposta anche in unicast: il telefono che ha chiesto
+            // non sempre riceve il multicast (power save Wi-Fi).
+            sendto(udp, pkt.constData(), pkt.size(), 0,
+                   (struct sockaddr *)&src, sizeof(src));
+        }
+        // I resolver legacy usano una porta effimera e sono one-shot. Solo i
+        // querier mDNS completi su 5353 ricevono i successivi refresh unicast.
+        if (!legacy)
+            ctx->recentQueriers.insert(src.sin_addr.s_addr,
+                                       monotonicMs() + 300000);
 
-        postStatus(ctx, QString::fromUtf8("mDNS query tipo %1 da %2 -> risposto")
+        postStatus(ctx, QObject::tr("mDNS query tipo %1 da %2 -> risposto")
                             .arg(qtype)
                             .arg(QString::fromUtf8(inet_ntoa(src.sin_addr))));
         return; // rispondi solo alla prima question utile
@@ -531,10 +815,11 @@ struct SessionArgs {
 };
 
 struct SenderArgs {
-    QString path;
+    QStringList paths;
     QString address;
     int port;
     QString deviceName;
+    QString localDeviceName;
     ShareService *service;
 };
 
@@ -550,8 +835,9 @@ void *sessionMain(void *arg)
 void *senderMain(void *arg)
 {
     SenderArgs *args = (SenderArgs *)arg;
-    QuickShareSender sender(args->path, args->address, args->port,
-                            args->deviceName, args->service);
+    QuickShareSender sender(args->paths, args->address, args->port,
+                            args->deviceName, args->localDeviceName,
+                            args->service);
     const bool success = sender.run();
     QMetaObject::invokeMethod(args->service, "sendFinished", Qt::QueuedConnection,
                               Q_ARG(bool, success));
@@ -567,7 +853,7 @@ void handleTcpConn(ShareCtx *ctx, int fd, const struct sockaddr_in &cli)
     args->service = ctx->svc;
     pthread_t thread;
     if (pthread_create(&thread, 0, &sessionMain, args) != 0) {
-        postStatus(ctx, QString::fromUtf8("Avvio sessione TCP fallito: %1")
+        postStatus(ctx, QObject::tr("Avvio sessione TCP fallito: %1")
                            .arg(strerror(errno)));
         close(fd);
         delete args;
@@ -583,7 +869,10 @@ void *workerMain(void *arg)
     int udp = socket(AF_INET, SOCK_DGRAM, 0);
     int tcp = socket(AF_INET, SOCK_STREAM, 0);
     if (udp < 0 || tcp < 0) {
-        postStatus(ctx, QString::fromUtf8("Errore socket: %1").arg(strerror(errno)));
+        postStatus(ctx, QObject::tr("Errore socket: %1").arg(strerror(errno)));
+        if (udp >= 0) close(udp);
+        if (tcp >= 0) close(tcp);
+        delete ctx;
         return 0;
     }
 
@@ -600,7 +889,10 @@ void *workerMain(void *arg)
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(ctx->mdnsPort);
     if (bind(udp, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        postStatus(ctx, QString::fromUtf8("Bind mDNS fallita: %1").arg(strerror(errno)));
+        postStatus(ctx, QObject::tr("Bind mDNS fallita: %1").arg(strerror(errno)));
+        close(udp);
+        close(tcp);
+        delete ctx;
         return 0;
     }
 
@@ -610,7 +902,7 @@ void *workerMain(void *arg)
     mr.imr_multiaddr.s_addr = inet_addr("224.0.0.251");
     mr.imr_interface.s_addr = ctx->localIp ? ctx->localIp : htonl(INADDR_ANY);
     if (setsockopt(udp, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) != 0)
-        postStatus(ctx, QString::fromUtf8("Attenzione: join multicast fallita: %1")
+        postStatus(ctx, QObject::tr("Attenzione: join multicast fallita: %1")
                             .arg(strerror(errno)));
     if (ctx->localIp)
         setsockopt(udp, IPPROTO_IP, IP_MULTICAST_IF,
@@ -627,25 +919,33 @@ void *workerMain(void *arg)
     if (bind(tcp, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||
         listen(tcp, 4) != 0 ||
         getsockname(tcp, (struct sockaddr *)&addr, &alen) != 0) {
-        postStatus(ctx, QString::fromUtf8("Listener TCP fallito: %1").arg(strerror(errno)));
+        postStatus(ctx, QObject::tr("Listener TCP fallito: %1").arg(strerror(errno)));
+        close(udp);
+        close(tcp);
+        delete ctx;
         return 0;
     }
     ctx->tcpPort = ntohs(addr.sin_port);
 
-    postStatus(ctx, QString::fromUtf8("Attivo — visibile come \"%1\" — IP %2, TCP %3")
+    // Le porte alternative sono usate solo dai test host e non partecipano
+    // al dominio mDNS reale su 5353.
+    bool identityAvailable = ctx->mdnsPort != MDNS_PORT;
+    for (int attempt = 0; attempt < 5 && !identityAvailable; ++attempt) {
+        identityAvailable = probeDnsIdentity(ctx, udp);
+        if (!identityAvailable)
+            generateDnsIdentity(ctx);
+    }
+    if (!identityAvailable)
+        postStatus(ctx, QObject::tr("Attenzione: impossibile verificare l'unicità del nome mDNS"));
+
+    postStatus(ctx, QObject::tr("Attivo — visibile come \"%1\" — IP %2, TCP %3")
                         .arg(QString::fromUtf8(ctx->deviceName))
                         .arg(QString::fromUtf8(inet_ntoa(*((struct in_addr *)&ctx->localIp))))
                         .arg(ctx->tcpPort));
-    postEvent(ctx, QString::fromUtf8("Servizio avviato"),
-              QString::fromUtf8("Visibile sulla Wi-Fi come %1 · porta TCP %2")
-                  .arg(QString::fromUtf8(ctx->deviceName)).arg(ctx->tcpPort));
 
 #ifdef Q_OS_BLACKBERRY
     ctx->bleWakeActive = startBleWakeListener(ctx);
     ctx->nextBleInitMs = monotonicMs() + 10000;
-    if (ctx->bleWakeActive)
-        postEvent(ctx, QString::fromUtf8("Discovery Pixel attiva"),
-                  QString::fromUtf8("Il segnale Quick Share BLE forza un nuovo annuncio Wi-Fi"));
 #endif
 
     // Burst iniziale: rende BBX Share visibile appena Android apre Quick Share,
@@ -654,15 +954,16 @@ void *workerMain(void *arg)
     armAnnounceBurst(ctx, monotonicMs());
 
     struct pollfd fds[2];
-    for (;;) {
+    for (; !ctx->svc->stopRequested();) {
         qint64 now = monotonicMs();
+        if (now >= ctx->nextIpCheckMs) {
+            ctx->nextIpCheckMs = now + 10000;
+            refreshLocalIp(ctx, udp, now);
+        }
 #ifdef Q_OS_BLACKBERRY
         if (!ctx->bleWakeActive && now >= ctx->nextBleInitMs) {
             ctx->bleWakeActive = startBleWakeListener(ctx);
             ctx->nextBleInitMs = now + 10000;
-            if (ctx->bleWakeActive)
-                postEvent(ctx, QString::fromUtf8("Discovery Pixel attiva"),
-                          QString::fromUtf8("Bluetooth rilevato: annunci Wi-Fi sincronizzati"));
         }
 #endif
         if (ctx->bleWakeRequested.fetchAndStoreOrdered(0) != 0 &&
@@ -672,36 +973,37 @@ void *workerMain(void *arg)
             sendAnnounce(ctx, udp);
             armAnnounceBurst(ctx, now);
             ctx->lastBleWakeMs = now;
+            postStatus(ctx, QObject::tr("Segnale Quick Share BLE rilevato: annuncio Wi-Fi inviato"));
         }
         if (ctx->svc->takeScanRequest()) {
             ctx->scanActive = true;
             ctx->scanDeadlineMs = now + 5000;
-            ctx->nextScanQueryMs = now + 200;
-            ctx->scanQueriesLeft = 3;
-            ctx->scanSeen.clear();
-            ctx->discoveredInstances.clear();
-            ctx->discoveredSrvHosts.clear();
-            ctx->discoveredTxts.clear();
-            ctx->discoveredAddresses.clear();
-            ctx->discoveredSrvPorts.clear();
+            ctx->nextScanQueryMs = now + 1000;
+            ctx->scanQueriesLeft = 2;
             sendMulticast(udp, discoveryQuery());
             sendAnnounce(ctx, udp);
             armAnnounceBurst(ctx, now);
+        }
+        QString resolveInstance;
+        if (ctx->svc->takeResolveRequest(&resolveInstance)) {
+            const QByteArray instance = resolveInstance.toLatin1().toLower();
+            if (!instance.isEmpty()) {
+                sendMulticast(udp, recordQuery(instance, QTYPE_SRV));
+                sendMulticast(udp, recordQuery(instance, QTYPE_TXT));
+            }
         }
         now = monotonicMs();
         if (ctx->scanActive && ctx->scanQueriesLeft > 0 &&
             now >= ctx->nextScanQueryMs) {
             sendMulticast(udp, discoveryQuery());
             --ctx->scanQueriesLeft;
-            ctx->nextScanQueryMs = now +
-                (ctx->scanQueriesLeft == 2 ? 300 :
-                 ctx->scanQueriesLeft == 1 ? 700 : 1200);
+            ctx->nextScanQueryMs = now + 2000;
         }
         if (ctx->scanActive && now >= ctx->scanDeadlineMs) {
             ctx->scanActive = false;
             QMetaObject::invokeMethod(ctx->svc, "setScanning", Qt::QueuedConnection,
                                       Q_ARG(bool, false));
-            postStatus(ctx, QString::fromUtf8("Ricerca terminata"));
+            postStatus(ctx, QObject::tr("Ricerca terminata"));
         }
         if (now >= ctx->nextAnnounceMs) {
             sendAnnounce(ctx, udp);
@@ -715,6 +1017,10 @@ void *workerMain(void *arg)
                 ctx->nextAnnounceMs = now + ANNOUNCE_STEADY_MS;
             }
         }
+        if (expireDiscoveryRecords(ctx, now))
+            publishDiscoveredDevices(ctx);
+        if (ctx->scanActive)
+            sendResolutionQueries(ctx, udp, now);
         fds[0].fd = udp; fds[0].events = POLLIN; fds[0].revents = 0;
         fds[1].fd = tcp; fds[1].events = POLLIN; fds[1].revents = 0;
         int r = poll(fds, 2,
@@ -741,22 +1047,31 @@ void *workerMain(void *arg)
             if (fd >= 0) handleTcpConn(ctx, fd, cli);
         }
     }
+#ifdef Q_OS_BLACKBERRY
+    if (ctx->bleWakeActive)
+        bt_le_deinit();
+#endif
+    close(udp);
+    close(tcp);
+    delete ctx;
     return 0;
 }
 
 } // namespace
 
 ShareService::ShareService(QObject *parent)
-    : QObject(parent), m_status(QString::fromUtf8("Avvio del servizio...")),
+    : QObject(parent), m_status(QObject::tr("Avvio del servizio...")),
       m_started(false), m_transferPending(false), m_consentDecision(-1),
       m_transferActive(false), m_transferProgress(0.0f),
       m_invokeManager(new bb::system::InvokeManager(this)),
       m_scanning(false), m_selectedDevicePort(0), m_sendActive(false),
       m_sendFailed(false),
-      m_scanRequested(false)
+      m_scanRequested(false), m_sendRefreshPending(false),
+      m_stopRequested(0), m_workerStarted(false)
 {
     m_events = new bb::cascades::ArrayDataModel(this);
     m_devices = new bb::cascades::ArrayDataModel(this);
+    loadHistory();
     const bool connected = connect(
         m_invokeManager,
         SIGNAL(invoked(const bb::system::InvokeRequest&)),
@@ -766,12 +1081,28 @@ ShareService::ShareService(QObject *parent)
     Q_UNUSED(connected);
 }
 
+ShareService::~ShareService()
+{
+    m_stopRequested.fetchAndStoreOrdered(1);
+    if (m_workerStarted)
+        pthread_join(m_workerThread, 0);
+}
+
 bool ShareService::takeScanRequest()
 {
     QMutexLocker locker(&m_discoveryMutex);
     const bool requested = m_scanRequested;
     m_scanRequested = false;
     return requested;
+}
+
+bool ShareService::takeResolveRequest(QString *instance)
+{
+    QMutexLocker locker(&m_discoveryMutex);
+    if (m_resolveInstanceRequested.isEmpty()) return false;
+    *instance = m_resolveInstanceRequested;
+    m_resolveInstanceRequested.clear();
+    return true;
 }
 
 bool ShareService::beginConsent(const QString &title, const QString &detail)
@@ -836,6 +1167,7 @@ void ShareService::clearHistory()
 {
     m_events->clear();
     emit eventsChanged();
+    saveHistory();
 }
 
 void ShareService::setTransferProgress(float progress, const QString &text)
@@ -854,25 +1186,104 @@ void ShareService::clearTransferProgress()
     emit transferProgressChanged();
 }
 
-void ShareService::appendEvent(const QString &title, const QString &detail)
+// Registra solo i trasferimenti reali (file inviati/ricevuti). Lo storico e'
+// persistente: fino a 50 voci su file ini nella cartella dati dell'app.
+void ShareService::appendEvent(const QString &name, const QString &detail,
+                               const QString &path)
 {
+    const QDateTime now = QDateTime::currentDateTime();
+    const QString stamp = now.date() == QDate::currentDate()
+        ? now.toString(QString::fromUtf8("HH:mm"))
+        : now.toString(QString::fromUtf8("dd/MM HH:mm"));
+
     QVariantMap row;
-    row["title"] = title;
-    row["detail"] = detail;
-    // I file completati vengono resi direttamente apribili dalla cronologia.
-    if (detail.startsWith(QLatin1String("/accounts/")) && QFileInfo(detail).isFile())
-        row["path"] = detail;
-    m_events->append(row);
+    row["title"] = name;
+    row["detail"] = detail + QString::fromUtf8(" \u00b7 ") + stamp;
+    if (QFileInfo(path).isFile())
+        row["path"] = path;
+    m_events->insert(0, row);
     emit eventsChanged();
+    saveHistory();
+}
+
+void ShareService::saveHistory()
+{
+    QStringList rows;
+    const int count = qMin(m_events->size(), 50);
+    for (int i = 0; i < count; ++i) {
+        const QVariantMap row = m_events->value(i).toMap();
+        rows.append(row.value("title").toString() + QChar(0x1f) +
+                    row.value("detail").toString() + QChar(0x1f) +
+                    row.value("path").toString());
+    }
+    QSettings settings(QDir::homePath() + QString::fromUtf8("/history.ini"),
+                       QSettings::IniFormat);
+    settings.setValue(QString::fromUtf8("history/version"), 2);
+    settings.setValue(QString::fromUtf8("history/rows"), rows);
+}
+
+void ShareService::loadHistory()
+{
+    QSettings settings(QDir::homePath() + QString::fromUtf8("/history.ini"),
+                       QSettings::IniFormat);
+    // version 2 = voci gia' in formato localizzato; scarta lo storico pre-i18n
+    const int version = settings.value(QString::fromUtf8("history/version"), 0).toInt();
+    const QStringList rows = version >= 2
+        ? settings.value(QString::fromUtf8("history/rows")).toStringList()
+        : QStringList();
+    bool migrated = false;
+    for (int i = rows.size() - 1; i >= 0; --i) {
+        const QStringList fields = rows[i].split(QChar(0x1f));
+        if (fields.size() != 3)
+            continue;
+        QVariantMap row;
+        row["title"] = fields[0];
+        QString detail = fields[1];
+        // Version 2 persisted the already-rendered Italian sentence. Rebuild
+        // the two transfer prefixes through QObject::tr() so old entries also
+        // follow the current device language after the translator is loaded.
+        const QString separator = QString::fromUtf8(" · ");
+        const QString receivedPrefix = QString::fromUtf8("Ricevuto da ");
+        const QString sentPrefix = QString::fromUtf8("Inviato a ");
+        QString sourcePrefix;
+        QString translatedTemplate;
+        if (detail.startsWith(receivedPrefix)) {
+            sourcePrefix = receivedPrefix;
+            translatedTemplate = QObject::tr("Ricevuto da %1 · %2");
+        } else if (detail.startsWith(sentPrefix)) {
+            sourcePrefix = sentPrefix;
+            translatedTemplate = QObject::tr("Inviato a %1 · %2");
+        }
+        if (!sourcePrefix.isEmpty()) {
+            const int firstSeparator = detail.indexOf(separator, sourcePrefix.size());
+            const int secondSeparator = firstSeparator < 0 ? -1
+                : detail.indexOf(separator, firstSeparator + separator.size());
+            if (firstSeparator > sourcePrefix.size() && secondSeparator > firstSeparator) {
+                const QString peer = detail.mid(sourcePrefix.size(),
+                                                firstSeparator - sourcePrefix.size());
+                const QString size = detail.mid(firstSeparator + separator.size(),
+                                                secondSeparator - firstSeparator - separator.size());
+                const QString stamp = detail.mid(secondSeparator + separator.size());
+                detail = translatedTemplate.arg(peer, size) + separator + stamp;
+                migrated = true;
+            }
+        }
+        row["detail"] = detail;
+        if (QFileInfo(fields[2]).isFile())
+            row["path"] = fields[2];
+        m_events->append(row);
+    }
+    if (!m_events->isEmpty())
+        emit eventsChanged();
+    if (migrated)
+        saveHistory();
 }
 
 void ShareService::openReceivedFile(const QString &path)
 {
     const QFileInfo file(path);
-    if (!file.exists()) {
-        appendEvent(QString::fromUtf8("File non trovato"), path);
+    if (!file.exists())
         return;
-    }
 
     // OPEN su una directory file:// viene risolto dal broker verso il File
     // Manager di sistema. Se la ROM non espone quel target, ripieghiamo sul
@@ -911,28 +1322,43 @@ void ShareService::handleOpenFolderReply()
 
 void ShareService::selectOutgoingFile(const QString &path)
 {
-    const QFileInfo file(path);
-    if (!file.exists() || !file.isFile()) {
-        appendEvent(QString::fromUtf8("File non selezionabile"), path);
-        return;
-    }
+    selectOutgoingFiles(QStringList() << path);
+}
 
-    m_outgoingPath = file.absoluteFilePath();
-    m_outgoingName = file.fileName();
-    const qint64 bytes = file.size();
+void ShareService::selectOutgoingFiles(const QStringList &paths)
+{
+    QStringList accepted;
+    qint64 bytes = 0;
+    for (int i = 0; i < paths.size(); ++i) {
+        const QFileInfo file(paths.at(i));
+        if (!file.exists() || !file.isFile()) continue;
+        const QString absolute = file.absoluteFilePath();
+        if (accepted.contains(absolute)) continue;
+        if (file.size() < 0 || bytes > Q_INT64_C(0x7fffffffffffffff) - file.size())
+            return;
+        accepted.append(absolute);
+        bytes += file.size();
+    }
+    if (accepted.isEmpty()) return;
+    m_outgoingPaths = accepted;
+    m_outgoingPath = accepted.first();
+    m_outgoingName = accepted.size() == 1
+        ? QFileInfo(accepted.first()).fileName()
+        : QObject::tr("%1 file").arg(accepted.size());
     if (bytes >= 1024 * 1024)
-        m_outgoingDetail = QString::fromUtf8("%1 MB · pronto per l'invio")
+        m_outgoingDetail = QObject::tr("%1 MB · pronto per l'invio")
             .arg((double)bytes / (1024.0 * 1024.0), 0, 'f', 1);
     else
-        m_outgoingDetail = QString::fromUtf8("%1 KB · pronto per l'invio")
+        m_outgoingDetail = QObject::tr("%1 KB · pronto per l'invio")
             .arg(qMax<qint64>(1, (bytes + 1023) / 1024));
     emit outgoingChanged();
 }
 
 void ShareService::clearOutgoingFile()
 {
-    if (m_outgoingPath.isEmpty())
+    if (m_outgoingPaths.isEmpty())
         return;
+    m_outgoingPaths.clear();
     m_outgoingPath.clear();
     m_outgoingName.clear();
     m_outgoingDetail.clear();
@@ -943,6 +1369,14 @@ void ShareService::clearDevices()
 {
     m_devices->clear();
     emit devicesChanged();
+    if (m_selectedDeviceInstance.isEmpty() && m_selectedDeviceName.isEmpty() &&
+        m_selectedDeviceAddress.isEmpty() && m_selectedDevicePort == 0)
+        return;
+    m_selectedDeviceInstance.clear();
+    m_selectedDeviceName.clear();
+    m_selectedDeviceAddress.clear();
+    m_selectedDevicePort = 0;
+    emit deviceSelectionChanged();
 }
 
 void ShareService::setScanning(bool scanning)
@@ -952,47 +1386,61 @@ void ShareService::setScanning(bool scanning)
     emit scanningChanged();
 }
 
-void ShareService::addDevice(const QString &name, const QString &address, int port)
+void ShareService::syncDevices(const QVariantList &devices)
 {
-    for (int i = 0; i < m_devices->size(); ++i) {
-        QVariantMap existing = m_devices->data(QVariantList() << i).toMap();
-        if (existing.value("address").toString() == address &&
-            existing.value("port").toInt() == port) {
-            if (!name.isEmpty() && existing.value("name").toString() != name) {
-                existing["name"] = name;
-                m_devices->replace(i, existing);
-                if (m_selectedDeviceAddress == address && m_selectedDevicePort == port) {
-                    m_selectedDeviceName = name;
-                    emit deviceSelectionChanged();
-                }
-                emit devicesChanged();
-            }
-            return;
+    bool selectedFound = false;
+    QString selectedName, selectedAddress;
+    int selectedPort = 0;
+    for (int i = 0; i < devices.size(); ++i) {
+        const QVariantMap row = devices.at(i).toMap();
+        if (!m_selectedDeviceInstance.isEmpty() &&
+            row.value("instance").toString() == m_selectedDeviceInstance) {
+            selectedFound = true;
+            selectedName = row.value("name").toString();
+            selectedAddress = row.value("address").toString();
+            selectedPort = row.value("port").toInt();
         }
     }
-    QVariantMap row;
-    row["name"] = name;
-    row["address"] = address;
-    row["port"] = port;
-    m_devices->append(row);
+
+    m_devices->clear();
+    for (int i = 0; i < devices.size(); ++i)
+        m_devices->append(devices.at(i).toMap());
     emit devicesChanged();
+
+    if (selectedFound) {
+        if (m_selectedDeviceName != selectedName ||
+            m_selectedDeviceAddress != selectedAddress ||
+            m_selectedDevicePort != selectedPort) {
+            m_selectedDeviceName = selectedName;
+            m_selectedDeviceAddress = selectedAddress;
+            m_selectedDevicePort = selectedPort;
+            emit deviceSelectionChanged();
+        }
+    } else if (!m_selectedDeviceInstance.isEmpty()) {
+        m_selectedDeviceInstance.clear();
+        m_selectedDeviceName.clear();
+        m_selectedDeviceAddress.clear();
+        m_selectedDevicePort = 0;
+        emit deviceSelectionChanged();
+    }
 }
 
 void ShareService::scanDevices()
 {
     if (m_scanning) return;
-    clearDevices();
     setScanning(true);
-    setStatus(QString::fromUtf8("Ricerca dispositivi vicini…"));
+    setStatus(QObject::tr("Ricerca dispositivi vicini…"));
     QMutexLocker locker(&m_discoveryMutex);
     m_scanRequested = true;
 }
 
-void ShareService::selectDevice(const QString &address, int port, const QString &name)
+void ShareService::selectDevice(const QString &address, int port,
+                                const QString &name, const QString &instance)
 {
     m_selectedDeviceAddress = address;
     m_selectedDevicePort = port;
     m_selectedDeviceName = name;
+    m_selectedDeviceInstance = instance;
     emit deviceSelectionChanged();
 }
 
@@ -1001,33 +1449,65 @@ void ShareService::clearDeviceSelection()
     if (!deviceReady()) return;
     m_selectedDeviceAddress.clear();
     m_selectedDeviceName.clear();
+    m_selectedDeviceInstance.clear();
     m_selectedDevicePort = 0;
     emit deviceSelectionChanged();
 }
 
 void ShareService::sendOutgoing()
 {
+    if (m_sendActive || m_sendRefreshPending || !outgoingReady() ||
+        !deviceReady() || m_selectedDeviceInstance.isEmpty()) return;
+    {
+        QMutexLocker locker(&m_discoveryMutex);
+        m_resolveInstanceRequested = m_selectedDeviceInstance;
+    }
+    m_sendRefreshPending = true;
+    setStatus(QObject::tr("Ricerca dispositivi vicini…"));
+    QTimer::singleShot(2000, this, SLOT(sendOutgoingResolved()));
+}
+
+void ShareService::sendOutgoingResolved()
+{
+    m_sendRefreshPending = false;
     if (m_sendActive || !outgoingReady() || !deviceReady()) return;
+    bool current = false;
+    for (int i = 0; i < m_devices->size(); ++i) {
+        const QVariantMap row = m_devices->value(i).toMap();
+        if (row.value("instance").toString() == m_selectedDeviceInstance) {
+            m_selectedDeviceAddress = row.value("address").toString();
+            m_selectedDevicePort = row.value("port").toInt();
+            m_selectedDeviceName = row.value("name").toString();
+            current = true;
+            break;
+        }
+    }
+    if (!current) {
+        clearDeviceSelection();
+        setStatus(QObject::tr("Il dispositivo non è più disponibile: esegui una nuova ricerca"));
+        return;
+    }
     m_sendActive = true;
     m_sendFailed = false;
-    m_sendStatus = QString::fromUtf8("Connessione al dispositivo…");
+    m_sendStatus = QObject::tr("Connessione al dispositivo…");
     emit sendStateChanged();
-    setTransferProgress(0.0f, QString::fromUtf8("Connessione…"));
+    setTransferProgress(0.0f, QObject::tr("Connessione…"));
     SenderArgs *args = new SenderArgs;
-    args->path = m_outgoingPath;
+    args->paths = m_outgoingPaths;
     args->address = m_selectedDeviceAddress;
     args->port = m_selectedDevicePort;
     args->deviceName = m_selectedDeviceName;
+    args->localDeviceName = m_localDeviceName;
     args->service = this;
     pthread_t th;
     if (pthread_create(&th, 0, &senderMain, args) != 0) {
         delete args;
         m_sendActive = false;
         m_sendFailed = true;
-        m_sendStatus = QString::fromUtf8("Impossibile avviare l'invio");
+        m_sendStatus = QObject::tr("Impossibile avviare l'invio");
         emit sendStateChanged();
         clearTransferProgress();
-        setStatus(QString::fromUtf8("Avvio invio fallito"));
+        setStatus(QObject::tr("Avvio invio fallito"));
         return;
     }
     pthread_detach(th);
@@ -1044,8 +1524,8 @@ void ShareService::sendFinished(bool success)
     m_sendActive = false;
     m_sendFailed = !success;
     if (m_sendStatus.isEmpty())
-        m_sendStatus = success ? QString::fromUtf8("Invio completato")
-                               : QString::fromUtf8("Invio non riuscito");
+        m_sendStatus = success ? QObject::tr("Invio completato")
+                               : QObject::tr("Invio non riuscito");
     if (m_transferActive)
         clearTransferProgress();
     emit sendStateChanged();
@@ -1057,11 +1537,8 @@ void ShareService::handleInvoke(const bb::system::InvokeRequest &request)
         return;
 
     const QString path = request.uri().toLocalFile();
-    if (!path.isEmpty()) {
+    if (!path.isEmpty())
         selectOutgoingFile(path);
-        appendEvent(QString::fromUtf8("File scelto da Condividi"),
-                    QFileInfo(path).fileName());
-    }
 }
 
 void ShareService::setStatus(const QString &status)
@@ -1090,18 +1567,12 @@ void ShareService::start(int mdnsPort)
     ctx->lastBleWakeMs = 0;
     ctx->bleWakeActive = false;
     ctx->nextBleInitMs = 0;
+    ctx->nextIpCheckMs = 0;
     ctx->deviceName = localDeviceName();
+    m_localDeviceName = QString::fromUtf8(ctx->deviceName);
 
-    // endpoint ID: 4 caratteri ASCII alfanumerici casuali
-    static const char *alpha =
-        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     srand((unsigned)time(0) ^ (unsigned)getpid());
-    unsigned char id[4];
-    for (int i = 0; i < 4; ++i) id[i] = (unsigned char)alpha[rand() % 62];
-
-    unsigned char nb[10] = { 0x23, id[0], id[1], id[2], id[3],
-                             0xFC, 0x9F, 0x5E, 0, 0 };
-    ctx->instanceLabel = urlSafeB64(nb, 10);
+    generateDnsIdentity(ctx);
 
     // endpoint info: bitfield (tipo device phone=1, visibile) + 16 byte random + nome
     unsigned char ei[64];
@@ -1114,7 +1585,12 @@ void ShareService::start(int mdnsPort)
     eiLen += nameLen;
     ctx->endpointInfoB64 = urlSafeB64(ei, eiLen);
 
-    pthread_t th;
-    pthread_create(&th, 0, &workerMain, ctx);
-    pthread_detach(th);
+    m_stopRequested.fetchAndStoreOrdered(0);
+    if (pthread_create(&m_workerThread, 0, &workerMain, ctx) != 0) {
+        delete ctx;
+        m_started = false;
+        setStatus(QObject::tr("Impossibile avviare il servizio di rete"));
+        return;
+    }
+    m_workerStarted = true;
 }

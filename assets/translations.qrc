@@ -1,0 +1,9 @@
+<RCC>
+    <qresource prefix="/translations">
+        <file>translations/bbxshare_en.qm</file>
+        <file>translations/bbxshare_de.qm</file>
+        <file>translations/bbxshare_fr.qm</file>
+        <file>translations/bbxshare_es.qm</file>
+        <file>translations/bbxshare_nl.qm</file>
+    </qresource>
+</RCC>

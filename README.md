@@ -45,16 +45,19 @@ As of 2026-08-29:
   advertises it, avoiding false success caused by closing TCP before Android
   finishes committing the received file;
 - mDNS discovery and advertisement for the Nearby Share Wi-Fi LAN service are
-  implemented;
+  implemented, with expiring record caches, follow-up queries, unique local
+  identities, collision probing, and graceful service shutdown;
 - Android Quick Share BLE advertisements are observed on BB10 and trigger an
   immediate mDNS re-announcement; a four-second mDNS heartbeat and short burst
   cover Pixel devices that do not actively repeat their PTR query;
 - the BB10 receiver implements the UKEY2 handshake, ECDH P-256 key exchange,
-  PIN confirmation, encrypted payload handling, and streamed file writes;
-- the BB10 sender can discover a receiver, negotiate the encrypted channel,
-  request consent, and stream a selected file;
-- the locally built host test binaries pass for the protobuf codec, mDNS
-  responder, and a 716,837-byte encrypted sender/receiver transfer;
+  constant-time authentication checks, PIN confirmation, bounded encrypted
+  payload handling, storage preflight, and streamed file writes;
+- the BB10 sender can discover a receiver, display the verification PIN,
+  negotiate the encrypted channel, request consent, send one or more selected
+  files, and react to peer cancellation during streaming;
+- the locally built host tests pass for the protobuf codec, mDNS responder,
+  and a 716,863-byte encrypted two-file sender/receiver transfer;
 - development notes record a successful receive flow on a Q10;
 - the final bidirectional test with a real Android Quick Share sender remains
   open.
@@ -70,16 +73,17 @@ mDNS and TCP traffic.
 | --- | --- | --- |
 | Android Quick Share -> BB10 | One or more files | Supported by the receiver; original names and extensions are preserved. |
 | Android Quick Share -> BB10 | Shared text | Supported; each text payload is saved as a dated `.txt` file. |
-| BB10 -> Android Quick Share | One local file | Supported by the sender after file and nearby-device selection. |
-| BB10 -> BB10 | One file in either direction | Supported when BBX Share is open on both devices and both are on the same LAN. |
+| BB10 -> Android Quick Share | One or more local files | Supported by the sender after file and nearby-device selection. |
+| BB10 -> BB10 | One or more files in either direction | Supported when BBX Share is open on both devices and both are on the same LAN. |
 
 Outgoing files are not restricted by extension. JPEG, PNG, GIF, MP4/M4V,
 MP3/M4A, PDF, TXT, and LOG receive a specific MIME type; every other regular
-file is sent as `application/octet-stream`. The current sender offers exactly
-one file per transfer, while the receiver can accept a multi-file introduction.
+file is sent as `application/octet-stream`. The sender and receiver support a
+multi-file introduction and use a distinct non-zero payload ID for every file.
 Received items are written incrementally to
 `/accounts/1000/shared/downloads/BBXShare`, and name collisions create a new
-numbered file instead of overwriting an existing one.
+numbered file instead of overwriting an existing one. Before consent, the
+receiver verifies that the destination is writable and has enough free space.
 
 Folder transfer, Wi-Fi credentials, structured contacts, and specialized
 clipboard payloads are not implemented. An incoming Quick Share text or URL is
@@ -93,6 +97,10 @@ Discovery uses the `_FC9F5ED42C8A._tcp.local` service over IPv4 mDNS. BBX Share
 sends an initial announcement burst, repeats its announcement every four
 seconds, answers multicast and QU unicast questions, and immediately announces
 again when its BLE scanner observes Quick Share service UUID `FE2C` or `FEF3`.
+Each process uses a randomized valid host/instance identity and probes for a
+collision before announcing. Discovered PTR/SRV/TXT/A records are retained only
+until their advertised TTL expires; incomplete records trigger throttled
+follow-up queries instead of disappearing at the end of a scan window.
 Android 17's anonymous 17-byte endpoint record is displayed as a friendly
 device-type fallback instead of exposing its encoded identifier.
 
@@ -100,9 +108,15 @@ The file path uses a direct TCP connection on the advertised LAN port. Session
 setup follows UKEY2 with ephemeral ECDH P-256, HKDF-derived keys, and a visible
 four-digit verification PIN. Protocol messages use the project's small
 protobuf wire codec; transferred frames are protected with
-AES-256-CBC and HMAC-SHA256. File data is streamed in 256 KiB chunks so a whole
-file does not need to fit in RAM, and the receiver validates payload IDs,
-offsets, declared sizes, and completion flags before reporting success.
+AES-256-CBC and HMAC-SHA256. File data is streamed in 64 KiB chunks so a whole
+file does not need to fit in RAM and peer cancellation can be observed between
+chunks. Global transfer and inactivity deadlines prevent stalled sessions from
+remaining open indefinitely. The receiver validates payload IDs, offsets,
+declared sizes, buffer limits, and completion flags before reporting success.
+
+Interrupted transfers are cleaned up and can be retried, but byte-range resume
+across a new Quick Share session is not part of the interoperable protocol flow
+implemented by this project.
 
 Bluetooth is currently only a discovery wake-up. The public BB10 Bluetooth API
 does not expose the custom service-data advertisement required to reproduce the
