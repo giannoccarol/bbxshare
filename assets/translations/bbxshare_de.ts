@@ -771,5 +771,9 @@ Gesamt: %2 · PIN %3</translation>
 </context>
 <context>
     <name>error</name>
+    <message>
+        <source>Errore UI BBX Share</source>
+        <translation>BBX Share UI-Fehler</translation>
+    </message>
 </context>
 </TS>

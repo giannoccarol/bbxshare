@@ -8,7 +8,7 @@ Page {
         bottomPadding: 24.0
         background: Color.Black
         Label {
-            text: "Errore UI BBX Share"
+            text: qsTr("Errore UI BBX Share")
             textStyle.base: SystemDefaults.TextStyles.TitleText
             textStyle.fontWeight: FontWeight.Bold
         }

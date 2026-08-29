@@ -138,7 +138,7 @@ Q_DECL_EXPORT int main(int argc, char **argv)
         ? qml->createRootObject<AbstractPane>() : 0;
     if (!root) {
         if (qmlErrorText.isEmpty())
-            qmlErrorText = QLatin1String("main.qml: creazione root fallita");
+            qmlErrorText = QObject::tr("main.qml: creazione root fallita");
         logHandler(QtCriticalMsg, qmlErrorText.toUtf8().constData());
 
         QmlDocument *errorQml = QmlDocument::create("asset:///error.qml").parent(&app);

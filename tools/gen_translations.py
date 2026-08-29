@@ -63,6 +63,7 @@ T = {
  "Inviato a %1 · %2": ["Sent to %1 · %2", "An %1 gesendet · %2", "Envoyé à %1 · %2", "Enviado a %1 · %2", "Verzonden naar %1 · %2"],
  "Invio completato": ["Send completed", "Senden abgeschlossen", "Envoi terminé", "Envío completado", "Verzenden voltooid"],
  "Invio completato a %1": ["Sent to %1", "An %1 gesendet", "Envoyé à %1", "Enviado a %1", "Verzonden naar %1"],
+ "main.qml: creazione root fallita": ["main.qml: root creation failed", "main.qml: Root konnte nicht erstellt werden", "main.qml : échec de création de la racine", "main.qml: no se pudo crear la raíz", "main.qml: maken van root mislukt"],
  "Invio di %1": ["Sending %1", "Sende %1", "Envoi de %1", "Enviando %1", "%1 verzenden"],
  "Invio in corso": ["Sending", "Wird gesendet", "Envoi en cours", "Enviando", "Verzenden"],
  "Invio in corso…": ["Sending…", "Wird gesendet…", "Envoi en cours…", "Enviando…", "Bezig met verzenden…"],
