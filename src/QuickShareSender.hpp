@@ -36,6 +36,7 @@ private:
     bool processIntroductionResponse(const QByteArray &frame);
     bool sendFile();
     bool sendDisconnection();
+    bool waitForSafeDisconnect();
 
     QByteArray makeOfflineFrame(int type, int fieldNumber,
                                 const QByteArray &payload) const;
@@ -71,6 +72,7 @@ private:
     qint64 m_fileSize;
     qint64 m_sentBytes;
     quint64 m_payloadId;
+    bool m_safeDisconnect;
     void *m_ecKey;
 };
 
