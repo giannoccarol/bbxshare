@@ -113,9 +113,11 @@ int main(int argc, char **argv)
     QByteArray b64(p + 2, (unsigned char)p[-1] - 2);
     QByteArray ei = QByteArray::fromBase64(
         b64, QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
-    if (ei.size() != 1 + 16 + 1 + 9)
+    if (ei.size() < 1 + 16 + 1 + 9)
         return fail("endpoint info di lunghezza inattesa");
     if ((unsigned char)ei[0] != (1 << 1)) return fail("bitfield endpoint info errato");
+    if ((unsigned char)ei[17] + 18 != ei.size())
+        return fail("lunghezza nome endpoint incoerente");
     if (memcmp(ei.constData() + 18, "BBX Share", 9) != 0)
         return fail("nome device nell'endpoint info errato");
 

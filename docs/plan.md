@@ -21,7 +21,7 @@ Punti chiave del protocollo:
 2. Handshake/chiavi: protobuf + UKEY2 con ECDH P-256 effimero.
 3. Trasferimento: payload cifrati sul canale negotiated (Wi-Fi/LAN).
 
-Vincolo BB10: nessuna API per BLE advertising custom → discovery via mDNS su LAN (telefono e BB10 sulla stessa Wi-Fi). La cifratura del protocollo usa primitive OpenSSL userspace e il codec protobuf minimale locale.
+Vincolo BB10: l'API pubblica può scansionare gli advertisement BLE ma non impostare il payload service-data Quick Share richiesto da Android. BBX Share ascolta quindi FE2C/FEF3 per rilanciare subito l'annuncio mDNS; il trasferimento resta sulla LAN Wi-Fi. La cifratura del protocollo usa primitive OpenSSL userspace e il codec protobuf minimale locale.
 
 ## Fasi
 
@@ -29,6 +29,9 @@ Vincolo BB10: nessuna API per BLE advertising custom → discovery via mDNS su L
    - `src/ShareService.cpp`: responder mDNS (UDP 5353, gruppo 224.0.0.251) che risponde
      a PTR/SRV/TXT/A per `_FC9F5ED42C8A._tcp.local`, + annunci periodici (TTL 120s),
      + listener TCP con porta effimera advertised in SRV.
+   - heartbeat mDNS ogni 4 secondi, burst all'avvio/ricerca e rilancio immediato
+     quando lo scanner BLE BB10 rileva Quick Share FE2C/FEF3; risposte QU unicast
+     e TTL multicast 255 per maggiore compatibilità con Pixel recenti.
    - Costruzione record conforme a NearDrop PROTOCOL.md: nome istanza = base64url
      di `0x23 | endpoint ID (4 char ASCII) | FC 9F 5E | 00 00`; TXT `n=` = base64url
      di `(deviceType<<1) | 16 byte random | nome length-prefixed`.
@@ -56,7 +59,7 @@ Vincolo BB10: nessuna API per BLE advertising custom → discovery via mDNS su L
      processo vivo, advertisement mDNS risolto su LAN e listener TCP raggiungibile.
    - verificati sul device: comparsa in Quick Share Android, conferma PIN,
      accettazione sul Q10, ricezione e apertura del file salvato.
-3. **Invio** — IMPLEMENTATA lato client con la versione `0.4.0.1`:
+3. **Invio** — IMPLEMENTATA lato client con la versione `0.4.1.1`:
    - invoke target applicazione `dev.bbos10.BBXShare.share` per `bb.action.SHARE`
      e URI `file://`, così BBX Share compare nel menu Condividi nativo;
    - File Picker Cascades e coda UI del file in uscita;
@@ -68,6 +71,9 @@ Vincolo BB10: nessuna API per BLE advertising custom → discovery via mDNS su L
      del canale cifrato e disconnessione finale conforme al protocollo;
    - test end-to-end locale superato su file da 716.837 byte, verificato byte per byte;
    - restante: test bidirezionale finale con un Android Quick Share reale.
+   - peer BBX Share omonimi non vengono più scartati: il nome annunciato include
+     il suffisso del dispositivo e l'autofiltro usa esclusivamente l'IP locale,
+     rendendo possibile BB10 ↔ BB10 sulla stessa Wi-Fi.
 4. **UX** — seconda espansione completata con la versione `0.4.0.1`:
    - interfaccia Cascades dark coerente con Q10;
    - Action Bar nativa inferiore con Attività, Ricevi e Invia; rimossi title bar

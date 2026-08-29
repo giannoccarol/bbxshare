@@ -396,7 +396,7 @@ Page {
                                             layoutProperties: StackLayoutProperties { spaceQuota: 1.0 }
                                             Label { text: ListItemData.name; textStyle.fontWeight: FontWeight.Bold }
                                             Label {
-                                                text: "Quick Share · Wi-Fi"
+                                                text: "Quick Share · " + ListItemData.address
                                                 textStyle.base: SystemDefaults.TextStyles.SmallText
                                                 textStyle.color: Color.LightGray
                                             }

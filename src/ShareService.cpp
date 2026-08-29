@@ -1,8 +1,10 @@
 #include "ShareService.hpp"
+#include "DiscoveryUtils.hpp"
 #include "QuickShareSession.hpp"
 #include "QuickShareSender.hpp"
 
 #include <QtCore/QByteArray>
+#include <QtCore/QAtomicInt>
 #include <QtCore/QFileInfo>
 #include <QtCore/QHash>
 #include <QtCore/QMetaObject>
@@ -28,6 +30,10 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef Q_OS_BLACKBERRY
+#include <btapi/btle.h>
+#endif
+
 /*
  * Dettagli protocollo da NearDrop PROTOCOL.md (grishka) e rquickshare:
  * - tipo servizio mDNS: "_FC9F5ED42C8A._tcp" (SHA256("NearbySharing")[:3])
@@ -42,9 +48,11 @@ namespace {
 
 const int     MDNS_PORT    = 5353;
 const quint32 RECORD_TTL   = 120;
+const int     ANNOUNCE_STEADY_MS = 4000;
+const int     BLE_WAKE_THROTTLE_MS = 2500;
 const char SERVICE_TYPE[] = "_FC9F5ED42C8A._tcp.local";
 const char HOST_LABEL[]   = "bbxshare";
-const char DEVICE_NAME[]  = "BBX Share";
+const char DEVICE_NAME_BASE[] = "BBX Share";
 
 const quint16 QTYPE_A   = 1;
 const quint16 QTYPE_PTR = 12;
@@ -55,6 +63,7 @@ const quint16 QTYPE_ANY = 255;
 struct ShareCtx {
     QByteArray instanceLabel;   // base64 url-safe, senza padding
     QByteArray endpointInfoB64; // valore TXT "n"
+    QByteArray deviceName;
     quint16 tcpPort;
     quint16 mdnsPort;
     quint32 localIp;            // network byte order
@@ -65,6 +74,10 @@ struct ShareCtx {
     int scanQueriesLeft;
     qint64 nextAnnounceMs;
     int announceBurstLeft;
+    QAtomicInt bleWakeRequested;
+    qint64 lastBleWakeMs;
+    bool bleWakeActive;
+    qint64 nextBleInitMs;
     QHash<QString, QString> scanSeen;
     QSet<QByteArray> discoveredInstances;
     QHash<QByteArray, QByteArray> discoveredSrvHosts;
@@ -79,6 +92,27 @@ qint64 monotonicMs()
     if (clock_gettime(CLOCK_MONOTONIC, &value) != 0)
         return (qint64)time(0) * 1000;
     return (qint64)value.tv_sec * 1000 + value.tv_nsec / 1000000;
+}
+
+QByteArray localDeviceName()
+{
+    QByteArray result(DEVICE_NAME_BASE);
+    char host[64] = {0};
+    if (gethostname(host, sizeof(host) - 1) != 0) return result;
+
+    const QByteArray hostname(host);
+    const int dash = hostname.lastIndexOf('-');
+    const QByteArray suffix = dash >= 0 ? hostname.mid(dash + 1).trimmed()
+                                        : QByteArray();
+    if (suffix.size() < 2 || suffix.size() > 8) return result;
+    for (int i = 0; i < suffix.size(); ++i) {
+        const char c = suffix.at(i);
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= 'a' && c <= 'z')))
+            return result;
+    }
+    return result + " " + suffix.toUpper();
 }
 
 void postStatus(ShareCtx *ctx, const QString &msg)
@@ -189,28 +223,6 @@ QByteArray decodeEndpointInfo(const QByteArray &txt)
     return QByteArray::fromBase64(value);
 }
 
-bool isReadableDeviceName(const QString &name)
-{
-    if (name.isEmpty() || name.contains(QChar(0xfffd))) return false;
-    for (int i = 0; i < name.size(); ++i) {
-        const ushort c = name.at(i).unicode();
-        if (c < 0x20 || c == 0x7f) return false;
-    }
-    return true;
-}
-
-QString fallbackDeviceName(const QByteArray &endpoint)
-{
-    if (endpoint.isEmpty()) return QString::fromUtf8("Dispositivo vicino");
-    const int type = ((unsigned char)endpoint.at(0) & 7) >> 1;
-    switch (type) {
-    case 1: return QString::fromUtf8("Telefono vicino");
-    case 2: return QString::fromUtf8("Tablet vicino");
-    case 3: return QString::fromUtf8("Computer vicino");
-    default: return QString::fromUtf8("Dispositivo vicino");
-    }
-}
-
 void postDevice(ShareCtx *ctx, const QString &name,
                 const QString &address, int port)
 {
@@ -293,22 +305,14 @@ void parseDiscoveryPacket(ShareCtx *ctx, const unsigned char *buf, int size)
         QString deviceName;
         const QByteArray encoded = ctx->discoveredTxts.value(instance);
         const QByteArray endpoint = decodeEndpointInfo(encoded);
-        if (endpoint.size() >= 18 && (endpoint.at(0) & 0x10) == 0) {
-            const int nameLength = (unsigned char)endpoint.at(17);
-            if (nameLength > 0 && endpoint.size() >= 18 + nameLength) {
-                const QString candidate = QString::fromUtf8(
-                    endpoint.constData() + 18, nameLength).trimmed();
-                if (isReadableDeviceName(candidate)) deviceName = candidate;
-            }
-        }
-        // Il nome dell'endpoint e' opzionale (device invisibile o TXT parziale).
+        // Il nome dell'endpoint e' opzionale sui record Android 17 da 17 byte.
         // In quel caso usa un'etichetta leggibile, mai il token mDNS.
-        if (deviceName.isEmpty()) deviceName = fallbackDeviceName(endpoint);
-        // Ignora l'annuncio locale anche se il TXT e' arrivato separatamente.
+        deviceName = BbxDiscovery::endpointDisplayName(endpoint);
+        // Ignora l'annuncio locale tramite indirizzo, non tramite display name:
+        // due BlackBerry eseguono legittimamente entrambi BBX Share.
         if (ctx->localIp && ip.size() == 4 &&
             memcmp(ip.constData(), &ctx->localIp, 4) == 0)
             continue;
-        if (deviceName == QString::fromUtf8(DEVICE_NAME)) continue;
         postDevice(ctx, deviceName, QString::fromLatin1(ipText), port);
     }
 }
@@ -425,6 +429,39 @@ void sendAnnounce(ShareCtx *ctx, int udp)
     sendMulticast(udp, pkt);
 }
 
+void armAnnounceBurst(ShareCtx *ctx, qint64 now)
+{
+    ctx->announceBurstLeft = 4;
+    ctx->nextAnnounceMs = now + 120;
+}
+
+#ifdef Q_OS_BLACKBERRY
+void bleAdvertisement(const char *, int8_t, bt_le_advert_packet_event_t,
+                      const char *data, int length, void *userData)
+{
+    ShareCtx *ctx = (ShareCtx *)userData;
+    if (ctx && BbxDiscovery::containsQuickShareService(data, length))
+        ctx->bleWakeRequested.fetchAndStoreOrdered(1);
+}
+
+bool startBleWakeListener(ShareCtx *ctx)
+{
+    static bt_le_callbacks_t callbacks;
+    memset(&callbacks, 0, sizeof(callbacks));
+    callbacks.advert_ext = &bleAdvertisement;
+    if (bt_le_init(&callbacks) != EOK) return false;
+
+    // 100 ms di intervallo, 50 ms di finestra: risposta rapida senza tenere
+    // la radio in ascolto continuo.
+    bt_le_set_scan_params(0x00A0, 0x0050, BT_LE_ADVERT_SCAN_PASSIVE);
+    if (bt_le_add_scan_device(BT_LE_BDADDR_ANY, ctx) != EOK) {
+        bt_le_deinit();
+        return false;
+    }
+    return true;
+}
+#endif
+
 void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
                   const struct sockaddr_in &src)
 {
@@ -459,6 +496,7 @@ void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
         }
         if (pos + 4 > n) return;
         quint16 qtype = ((quint16)buf[pos] << 8) | buf[pos + 1];
+        quint16 qclass = ((quint16)buf[pos + 2] << 8) | buf[pos + 3];
         pos += 4;
         if (compressed) continue; // le question compresse sono rare; ignorale
 
@@ -470,9 +508,10 @@ void handlePacket(ShareCtx *ctx, int udp, const unsigned char *buf, int n,
         if (!wantPtr && !wantSrv && !wantTxt && !wantA) continue;
 
         QByteArray ptrName((const char *)buf + start, pos - 4 - start);
+        const bool wantsUnicast = (qclass & 0x8000) != 0;
         QByteArray pkt = buildResponse(ctx, legacy ? id : 0, !legacy,
                                        wantPtr, ptrName, wantSrv, wantTxt, wantA);
-        if (legacy)
+        if (legacy || wantsUnicast)
             sendto(udp, pkt.constData(), pkt.size(), 0,
                    (struct sockaddr *)&src, sizeof(src));
         else
@@ -573,6 +612,12 @@ void *workerMain(void *arg)
     if (setsockopt(udp, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mr, sizeof(mr)) != 0)
         postStatus(ctx, QString::fromUtf8("Attenzione: join multicast fallita: %1")
                             .arg(strerror(errno)));
+    if (ctx->localIp)
+        setsockopt(udp, IPPROTO_IP, IP_MULTICAST_IF,
+                   &ctx->localIp, sizeof(ctx->localIp));
+    const unsigned char multicastTtl = 255;
+    setsockopt(udp, IPPROTO_IP, IP_MULTICAST_TTL,
+               &multicastTtl, sizeof(multicastTtl));
 
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
@@ -588,22 +633,46 @@ void *workerMain(void *arg)
     ctx->tcpPort = ntohs(addr.sin_port);
 
     postStatus(ctx, QString::fromUtf8("Attivo — visibile come \"%1\" — IP %2, TCP %3")
-                        .arg(DEVICE_NAME)
+                        .arg(QString::fromUtf8(ctx->deviceName))
                         .arg(QString::fromUtf8(inet_ntoa(*((struct in_addr *)&ctx->localIp))))
                         .arg(ctx->tcpPort));
     postEvent(ctx, QString::fromUtf8("Servizio avviato"),
               QString::fromUtf8("Visibile sulla Wi-Fi come %1 · porta TCP %2")
-                  .arg(DEVICE_NAME).arg(ctx->tcpPort));
+                  .arg(QString::fromUtf8(ctx->deviceName)).arg(ctx->tcpPort));
+
+#ifdef Q_OS_BLACKBERRY
+    ctx->bleWakeActive = startBleWakeListener(ctx);
+    ctx->nextBleInitMs = monotonicMs() + 10000;
+    if (ctx->bleWakeActive)
+        postEvent(ctx, QString::fromUtf8("Discovery Pixel attiva"),
+                  QString::fromUtf8("Il segnale Quick Share BLE forza un nuovo annuncio Wi-Fi"));
+#endif
 
     // Burst iniziale: rende BBX Share visibile appena Android apre Quick Share,
     // senza aspettare il normale refresh mDNS.
     sendAnnounce(ctx, udp);
-    ctx->announceBurstLeft = 3;
-    ctx->nextAnnounceMs = monotonicMs() + 150;
+    armAnnounceBurst(ctx, monotonicMs());
 
     struct pollfd fds[2];
     for (;;) {
         qint64 now = monotonicMs();
+#ifdef Q_OS_BLACKBERRY
+        if (!ctx->bleWakeActive && now >= ctx->nextBleInitMs) {
+            ctx->bleWakeActive = startBleWakeListener(ctx);
+            ctx->nextBleInitMs = now + 10000;
+            if (ctx->bleWakeActive)
+                postEvent(ctx, QString::fromUtf8("Discovery Pixel attiva"),
+                          QString::fromUtf8("Bluetooth rilevato: annunci Wi-Fi sincronizzati"));
+        }
+#endif
+        if (ctx->bleWakeRequested.fetchAndStoreOrdered(0) != 0 &&
+            now - ctx->lastBleWakeMs >= BLE_WAKE_THROTTLE_MS) {
+            // Android e' entrato nella superficie Quick Share: ripubblica
+            // immediatamente, come fa rquickshare su Linux.
+            sendAnnounce(ctx, udp);
+            armAnnounceBurst(ctx, now);
+            ctx->lastBleWakeMs = now;
+        }
         if (ctx->svc->takeScanRequest()) {
             ctx->scanActive = true;
             ctx->scanDeadlineMs = now + 5000;
@@ -616,6 +685,8 @@ void *workerMain(void *arg)
             ctx->discoveredAddresses.clear();
             ctx->discoveredSrvPorts.clear();
             sendMulticast(udp, discoveryQuery());
+            sendAnnounce(ctx, udp);
+            armAnnounceBurst(ctx, now);
         }
         now = monotonicMs();
         if (ctx->scanActive && ctx->scanQueriesLeft > 0 &&
@@ -637,10 +708,11 @@ void *workerMain(void *arg)
             if (ctx->announceBurstLeft > 0) {
                 --ctx->announceBurstLeft;
                 ctx->nextAnnounceMs = now +
-                    (ctx->announceBurstLeft == 2 ? 350 :
-                     ctx->announceBurstLeft == 1 ? 1000 : 15000);
+                    (ctx->announceBurstLeft == 3 ? 250 :
+                     ctx->announceBurstLeft == 2 ? 500 :
+                     ctx->announceBurstLeft == 1 ? 1000 : ANNOUNCE_STEADY_MS);
             } else {
-                ctx->nextAnnounceMs = now + 15000;
+                ctx->nextAnnounceMs = now + ANNOUNCE_STEADY_MS;
             }
         }
         fds[0].fd = udp; fds[0].events = POLLIN; fds[0].revents = 0;
@@ -1014,6 +1086,11 @@ void ShareService::start(int mdnsPort)
     ctx->scanQueriesLeft = 0;
     ctx->nextAnnounceMs = 0;
     ctx->announceBurstLeft = 0;
+    ctx->bleWakeRequested = 0;
+    ctx->lastBleWakeMs = 0;
+    ctx->bleWakeActive = false;
+    ctx->nextBleInitMs = 0;
+    ctx->deviceName = localDeviceName();
 
     // endpoint ID: 4 caratteri ASCII alfanumerici casuali
     static const char *alpha =
@@ -1031,9 +1108,9 @@ void ShareService::start(int mdnsPort)
     int eiLen = 0;
     ei[eiLen++] = 1 << 1; // deviceType=phone, visibility=0 (visibile)
     for (int i = 0; i < 16; ++i) ei[eiLen++] = (unsigned char)(rand() & 0xFF);
-    int nameLen = (int)strlen(DEVICE_NAME);
+    int nameLen = qMin(ctx->deviceName.size(), 45);
     ei[eiLen++] = (unsigned char)nameLen;
-    memcpy(ei + eiLen, DEVICE_NAME, nameLen);
+    memcpy(ei + eiLen, ctx->deviceName.constData(), nameLen);
     eiLen += nameLen;
     ctx->endpointInfoB64 = urlSafeB64(ei, eiLen);
 

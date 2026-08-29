@@ -21,6 +21,7 @@ test/moc_*.cpp
 test/debug_main
 test/mini_client
 test/test_mdns
+test/test_discovery
 test/test_outbound_integration
 test/test_proto
 
