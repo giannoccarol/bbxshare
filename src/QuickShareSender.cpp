@@ -616,7 +616,18 @@ bool QuickShareSender::sendIntroduction()
     QFileInfo file(m_path);
     m_fileSize = file.size();
     QByteArray metadata;
+    const QByteArray mime = fileMimeType(file.fileName());
     ProtoWire::appendBytes(&metadata, 1, safeName(file.fileName()).toUtf8());
+    // Recent Quick Share receivers validate the attachment classification and
+    // require a non-zero stable attachment id in addition to payload_id.
+    quint64 metadataType = 0; // UNKNOWN
+    if (mime.startsWith("image/")) metadataType = 1;       // IMAGE
+    else if (mime.startsWith("video/")) metadataType = 2;  // VIDEO
+    else if (file.suffix().compare("apk", Qt::CaseInsensitive) == 0)
+        metadataType = 3;                                  // APP
+    else if (mime.startsWith("audio/")) metadataType = 4; // AUDIO
+    if (metadataType != 0)
+        ProtoWire::appendVarint(&metadata, 2, metadataType);
     quint64 id = 0;
     const QByteArray idBytes = randomBytes(8);
     for (int i = 0; i < idBytes.size(); ++i) id = (id << 8) | (unsigned char)idBytes.at(i);
@@ -624,9 +635,11 @@ bool QuickShareSender::sendIntroduction()
     m_payloadId = id;
     ProtoWire::appendVarint(&metadata, 3, id);
     ProtoWire::appendVarint(&metadata, 4, (quint64)m_fileSize);
-    ProtoWire::appendBytes(&metadata, 5, fileMimeType(file.fileName()));
+    ProtoWire::appendBytes(&metadata, 5, mime);
+    ProtoWire::appendVarint(&metadata, 6, id); // attachment id (non-zero)
     QByteArray introduction;
     ProtoWire::appendBytes(&introduction, 1, metadata);
+    ProtoWire::appendVarint(&introduction, 8, 1); // NEARBY_SHARE use case
     QByteArray v1;
     ProtoWire::appendVarint(&v1, 1, 1);
     ProtoWire::appendBytes(&v1, 2, introduction);

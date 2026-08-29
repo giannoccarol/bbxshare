@@ -2,7 +2,7 @@
 <qnx xmlns="http://www.qnx.com/schemas/application/1.0">
     <id>dev.bbos10.BBXShare</id>
     <name>BBX Share</name>
-    <versionNumber>0.4.1</versionNumber>
+    <versionNumber>0.4.2</versionNumber>
     <buildId>1</buildId>
     <description>Native Quick Share file exchange for BlackBerry 10.</description>
     <author>giannoccarol</author>

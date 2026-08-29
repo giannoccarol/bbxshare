@@ -38,6 +38,9 @@ the matching sizes to the BB10 launcher and package metadata.
 
 As of 2026-08-29:
 
+- the sender includes the Quick Share `NEARBY_SHARE` use case, a non-zero
+  attachment id, and image/video/audio/app classification for strict Android
+  receivers;
 - mDNS discovery and advertisement for the Nearby Share Wi-Fi LAN service are
   implemented;
 - Android Quick Share BLE advertisements are observed on BB10 and trigger an
