@@ -25,6 +25,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -65,6 +66,47 @@ const quint16 QTYPE_PTR = 12;
 const quint16 QTYPE_TXT = 16;
 const quint16 QTYPE_SRV = 33;
 const quint16 QTYPE_ANY = 255;
+
+// Come rQuickShare, non esporre un endpoint mDNS finché la porta TCP
+// pubblicizzata non risponde. Questo elimina i record SRV rimasti in cache
+// dopo un riavvio o un cambio porta del receiver.
+bool tcpEndpointReachable(const QByteArray &address, int port)
+{
+    if (address.size() != 4 || port <= 0 || port > 65535)
+        return false;
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        close(fd);
+        return false;
+    }
+    struct sockaddr_in peer;
+    memset(&peer, 0, sizeof(peer));
+    peer.sin_family = AF_INET;
+    memcpy(&peer.sin_addr, address.constData(), 4);
+    peer.sin_port = htons((quint16)port);
+    const int rc = connect(fd, (struct sockaddr *)&peer, sizeof(peer));
+    if (rc == 0) {
+        close(fd);
+        return true;
+    }
+    if (errno != EINPROGRESS) {
+        close(fd);
+        return false;
+    }
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    const bool ready = poll(&pfd, 1, 750) > 0 && (pfd.revents & POLLOUT);
+    int error = ECONNREFUSED;
+    socklen_t length = sizeof(error);
+    if (ready)
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length);
+    close(fd);
+    return ready && error == 0;
+}
 
 struct ShareCtx {
     QByteArray instanceLabel;   // base64 url-safe, senza padding
@@ -381,6 +423,8 @@ void publishDiscoveredDevices(ShareCtx *ctx)
         const int port = ctx->discoveredSrvPorts.value(instance, 0);
         if (host.isEmpty() || ip.size() != 4 || port <= 0) continue;
         if (ctx->localIp && memcmp(ip.constData(), &ctx->localIp, 4) == 0)
+            continue;
+        if (!tcpEndpointReachable(ip, port))
             continue;
 
         char ipText[INET_ADDRSTRLEN] = {0};
