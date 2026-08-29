@@ -10,6 +10,30 @@ endorsed by, or sponsored by BlackBerry Limited or Google LLC. “BlackBerry”,
 “Android”, “Nearby Share”, and “Quick Share” are the property of their
 respective owners.
 
+## App icon
+
+<p align="center">
+  <img src="assets/images/bbxshare-icon-144.png" width="144" alt="BBX Share app icon">
+</p>
+
+The BBX Share icon uses three connected nodes to suggest sharing and device-
+to-device transfer, with a subtle geometric “B” in the negative space. Its
+dark graphite, navy, cyan, and blue palette takes inspiration from the crisp,
+layered visual language of BlackBerry 10 while remaining an original mark.
+
+The BAR descriptor includes platform-specific icon assets for the common BB10
+smartphone resolutions:
+
+| Device display | Icon asset |
+| --- | ---: |
+| 720 × 720 | 90 × 90 px |
+| 720 × 1280 | 96 × 96 px |
+| 768 × 1280 | 110 × 110 px |
+| 1440 × 1440 | 144 × 144 px |
+
+The source artwork is kept in `assets/images/`, while the descriptor exposes
+the matching sizes to the BB10 launcher and package metadata.
+
 ## Current status
 
 As of 2026-08-29:
