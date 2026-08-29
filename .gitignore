@@ -1,0 +1,35 @@
+# BlackBerry 10 / QNX generated output
+arm/
+x86/
+Device-*/
+Simulator-*/
+*.bar
+*.elf
+*.sym
+*.symbols.elf
+*.o
+*.obj
+*.so
+*.a
+*.d
+assets/.assets.index
+
+# Generated Qt meta-object sources
+test/moc_*.cpp
+
+# Host test executables
+test/debug_main
+test/mini_client
+test/test_mdns
+test/test_outbound_integration
+test/test_proto
+
+# IDE/editor and local tooling state
+.settings/
+.cproject
+.project
+.qmake.stash
+compile_commands.json
+.DS_Store
+*~
+*.swp

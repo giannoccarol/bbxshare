@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<qnx xmlns="http://www.qnx.com/schemas/application/1.0">
+    <id>dev.bbos10.BBXShare</id>
+    <name>BBX Share</name>
+    <versionNumber>0.4.0</versionNumber>
+    <buildId>1</buildId>
+    <description>Native Quick Share file exchange for BlackBerry 10.</description>
+    <author>giannoccarol</author>
+
+    <initialWindow>
+        <aspectRatio>auto</aspectRatio>
+        <autoOrients>true</autoOrients>
+        <systemChrome>none</systemChrome>
+    </initialWindow>
+
+    <configuration name="Device-Debug">
+        <platformArchitecture>armle-v7</platformArchitecture>
+        <asset path="arm/o.le-v7-g/BBXShare" entry="true" type="Qnx/Elf">BBXShare</asset>
+    </configuration>
+
+    <configuration name="Device-Release">
+        <entryPointType>Qnx/Cascades</entryPointType>
+        <platformArchitecture>armle-v7</platformArchitecture>
+        <asset path="arm/o.le-v7/BBXShare.so" entry="true" type="Qnx/Elf">BBXShare.so</asset>
+    </configuration>
+
+    <asset path="assets">assets</asset>
+
+    <!-- Mostra BBX Share tra le destinazioni del menu Condividi BB10. -->
+    <invoke-target id="dev.bbos10.BBXShare.share">
+        <invoke-target-type>application</invoke-target-type>
+        <invoke-target-name>BBX Share</invoke-target-name>
+        <filter>
+            <action>bb.action.SHARE</action>
+            <mime-type>*</mime-type>
+            <property var="uris" value="file://"/>
+        </filter>
+    </invoke-target>
+
+    <permission system="true">run_native</permission>
+    <permission>access_shared</permission>
+    <permission>access_internet</permission>
+    <env var="LD_LIBRARY_PATH" value="app/native/lib:/usr/lib/qt4/lib"/>
+</qnx>
