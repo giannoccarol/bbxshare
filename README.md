@@ -123,6 +123,10 @@ does not expose the custom service-data advertisement required to reproduce the
 complete Android BLE-first visibility path, so Wi-Fi must remain connected on
 both devices.
 
+The UI uses the device language when an English, German, French, Spanish, or
+Dutch catalog is available. Unsupported locales, including Italian, fall back
+to English.
+
 ## Repository contents
 
 ```text

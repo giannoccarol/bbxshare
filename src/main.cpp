@@ -11,6 +11,7 @@
 #include <QtCore/QDir>
 #include <QtCore/QList>
 #include <QtCore/QLocale>
+#include <QtCore/QStringList>
 #include <QtCore/QTextCodec>
 #include <QtCore/QTranslator>
 #include <QtCore/QTextStream>
@@ -21,8 +22,10 @@
 
 using namespace bb::cascades;
 
-// Catena traduzioni: lingua del device -> inglese (fallback garantito) ->
-// italiano (solo per stringhe assenti da tutti i .qm, cioè la lingua base).
+// Catena traduzioni: lingua supportata del device -> inglese. Per ogni lingua
+// non supportata (incluso l'italiano) si usa direttamente il catalogo inglese;
+// il testo sorgente italiano resta solo una protezione d'emergenza se un BAR è
+// stato installato senza cataloghi.
 static QTranslator *g_baseTranslator = 0;
 static QTranslator *g_langTranslator = 0;
 
@@ -46,7 +49,12 @@ static void installTranslations()
     // (il default locale e' inizializzato da BB10 con la lingua impostata).
     QString lang = QLocale().name();
     lang = lang.section(QLatin1Char('_'), 0, 0).toLower();
-    if (lang.isEmpty() || lang.size() > 3)
+    const QStringList supportedLanguages = QStringList()
+        << QLatin1String("en") << QLatin1String("de")
+        << QLatin1String("fr") << QLatin1String("es")
+        << QLatin1String("nl");
+    if (lang.isEmpty() || lang.size() > 3 ||
+        !supportedLanguages.contains(lang))
         lang = QLatin1String("en");
 
     bool langLoaded = false;
