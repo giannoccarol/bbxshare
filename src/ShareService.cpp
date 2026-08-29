@@ -25,6 +25,7 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <pthread.h>
@@ -65,6 +66,49 @@ const quint16 QTYPE_PTR = 12;
 const quint16 QTYPE_TXT = 16;
 const quint16 QTYPE_SRV = 33;
 const quint16 QTYPE_ANY = 255;
+
+// Verifica l'endpoint solo quando l'utente avvia l'invio. Non va usata nella
+// discovery: alcune reti filtrano i probe TCP pur lasciando funzionare mDNS.
+bool tcpEndpointReachable(const QString &address, int port)
+{
+    if (port <= 0 || port > 65535)
+        return false;
+    const int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) != 0) {
+        close(fd);
+        return false;
+    }
+    struct sockaddr_in peer;
+    memset(&peer, 0, sizeof(peer));
+    peer.sin_family = AF_INET;
+    peer.sin_port = htons((quint16)port);
+    if (inet_pton(AF_INET, address.toUtf8().constData(), &peer.sin_addr) != 1) {
+        close(fd);
+        return false;
+    }
+    const int rc = connect(fd, (struct sockaddr *)&peer, sizeof(peer));
+    if (rc == 0) {
+        close(fd);
+        return true;
+    }
+    if (errno != EINPROGRESS) {
+        close(fd);
+        return false;
+    }
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLOUT;
+    pfd.revents = 0;
+    const bool ready = poll(&pfd, 1, 750) > 0 && (pfd.revents & POLLOUT);
+    int error = ECONNREFUSED;
+    socklen_t length = sizeof(error);
+    if (ready)
+        getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length);
+    close(fd);
+    return ready && error == 0;
+}
 
 struct ShareCtx {
     QByteArray instanceLabel;   // base64 url-safe, senza padding
@@ -1484,6 +1528,16 @@ void ShareService::sendOutgoingResolved()
     if (!current) {
         clearDeviceSelection();
         setStatus(QObject::tr("error_device_unavailable"));
+        return;
+    }
+    if (!tcpEndpointReachable(m_selectedDeviceAddress, m_selectedDevicePort)) {
+        m_sendActive = false;
+        m_sendFailed = true;
+        m_sendStatus = QObject::tr("error_device_unavailable");
+        emit sendStateChanged();
+        setStatus(QObject::tr("error_device_unavailable"));
+        clearDeviceSelection();
+        scanDevices();
         return;
     }
     m_sendActive = true;
