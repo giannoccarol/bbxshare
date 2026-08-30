@@ -710,16 +710,20 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
             !nestedVarint(fileMetadata.at(i), 3, &id) ||
             !nestedVarint(fileMetadata.at(i), 4, &size))
             return fail(QObject::tr("metadata file incompleti"));
-        if (id > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
-            size > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
-            m_files.contains((qint64)id))
+        // Protobuf int64 uses the ordinary two's-complement varint encoding.
+        // Nearby Share implementations (including rQuickShare) deliberately
+        // generate IDs across the complete signed range, so the high bit is
+        // not evidence of an invalid ID.
+        const qint64 payloadId = (qint64)id;
+        if (size > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
+            m_files.contains(payloadId))
             return fail(QObject::tr("identificatore o dimensione file non validi"));
         nestedBytes(fileMetadata.at(i), 5, &mimeBytes);
         IncomingFile *file = new IncomingFile;
         file->name = QString::fromUtf8(nameBytes);
         file->mimeType = QString::fromUtf8(mimeBytes);
         file->path = safeDestination(file->name);
-        file->payloadId = (qint64)id;
+        file->payloadId = payloadId;
         file->size = (qint64)size;
         file->received = 0;
         file->bytePayload = false;
@@ -736,16 +740,16 @@ bool QuickShareSession::processIntroduction(const QByteArray &introduction)
         if (!nestedVarint(textMetadata.at(i), 4, &id) ||
             !nestedVarint(textMetadata.at(i), 5, &size))
             return fail(QObject::tr("metadata testo incompleti"));
-        if (id > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
-            size > (quint64)MAX_BYTE_PAYLOAD_SIZE ||
-            m_files.contains((qint64)id))
+        const qint64 payloadId = (qint64)id;
+        if (size > (quint64)MAX_BYTE_PAYLOAD_SIZE ||
+            m_files.contains(payloadId))
             return fail(QObject::tr("payload testo troppo grande o non valido"));
         IncomingFile *file = new IncomingFile;
         file->name = QObject::tr("Testo ricevuto %1.txt")
             .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH.mm.ss"));
         file->mimeType = QString::fromUtf8("text/plain");
         file->path = safeDestination(file->name);
-        file->payloadId = (qint64)id;
+        file->payloadId = payloadId;
         file->size = (qint64)size;
         file->received = 0;
         file->bytePayload = true;
@@ -872,9 +876,9 @@ bool QuickShareSession::processPayloadTransfer(const QByteArray &payloadTransfer
         !nestedVarint(chunk, 1, &flags) || !nestedVarint(chunk, 2, &offset))
         return fail(QObject::tr("PayloadTransfer non valido"));
     nestedBytes(chunk, 3, &body);
-    if (rawId > (quint64)Q_INT64_C(0x7fffffffffffffff) ||
-        offset > (quint64)Q_INT64_C(0x7fffffffffffffff))
+    if (offset > (quint64)Q_INT64_C(0x7fffffffffffffff))
         return fail(QObject::tr("identificatore o offset payload non valido"));
+    // PayloadHeader.id is an int64 and negative values are valid on the wire.
     const qint64 id = (qint64)rawId;
 
     if (payloadType == 2) {

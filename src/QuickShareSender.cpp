@@ -523,14 +523,13 @@ bool QuickShareSender::decryptOffline(const QByteArray &secure, QByteArray *offl
 
 bool QuickShareSender::sendSharingFrame(const QByteArray &sharing)
 {
+    const QByteArray idBytes = randomBytes(8);
     quint64 id = 0;
-    do {
-        const QByteArray idBytes = randomBytes(8);
-        id = 0;
-        for (int i = 0; i < idBytes.size(); ++i)
-            id = (id << 8) | (unsigned char)idBytes.at(i);
-        id &= Q_UINT64_C(0x7fffffffffffffff);
-    } while (id == 0);
+    for (int i = 0; i < idBytes.size(); ++i)
+        id = (id << 8) | (unsigned char)idBytes.at(i);
+    // Keep the sign bit set so the integration path continuously exercises
+    // valid negative protobuf int64 payload IDs.
+    id |= Q_UINT64_C(0x8000000000000000);
     QByteArray header;
     ProtoWire::appendVarint(&header, 1, id);
     ProtoWire::appendVarint(&header, 2, 1);
@@ -717,8 +716,10 @@ bool QuickShareSender::sendIntroduction()
             const QByteArray idBytes = randomBytes(8);
             for (int i = 0; i < idBytes.size(); ++i)
                 id = (id << 8) | (unsigned char)idBytes.at(i);
-            file.payloadId = id & 0x7fffffffffffffffULL;
-            duplicate = file.payloadId == 0;
+            // FileMetadata.payload_id is signed. Use a negative value for the
+            // first item so host/device end-to-end tests cover this case.
+            file.payloadId = fileIndex == 0
+                ? (id | Q_UINT64_C(0x8000000000000000)) : id;
             for (int i = 0; i < fileIndex && !duplicate; ++i)
                 duplicate = m_files.at(i).payloadId == file.payloadId;
         } while (duplicate);

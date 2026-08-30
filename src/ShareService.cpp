@@ -131,6 +131,7 @@ struct ShareCtx {
     qint64 nextBleInitMs;
     qint64 nextIpCheckMs;
     QHash<QByteArray, qint64> discoveredInstanceExpiry;
+    QHash<QByteArray, qint64> discoveredInstanceSeen;
     QHash<QByteArray, QByteArray> discoveredSrvHosts;
     QHash<QByteArray, qint64> discoveredSrvExpiry;
     QHash<QByteArray, QByteArray> discoveredTxts;
@@ -370,6 +371,7 @@ bool expireDiscoveryRecords(ShareCtx *ctx, qint64 now)
         if (it.value() <= now) {
             const QByteArray key = it.key();
             it = ctx->discoveredInstanceExpiry.erase(it);
+            ctx->discoveredInstanceSeen.remove(key);
             ctx->discoveredSrvHosts.remove(key);
             ctx->discoveredSrvPorts.remove(key);
             ctx->discoveredSrvExpiry.remove(key);
@@ -417,7 +419,8 @@ void publishDiscoveredDevices(ShareCtx *ctx)
     orderedInstances.sort();
 
     QVariantList rows;
-    QByteArray signature;
+    QList<QByteArray> rowInstances;
+    QHash<QByteArray, int> identityRows;
     for (int i = 0; i < orderedInstances.size(); ++i) {
         const QByteArray instance = orderedInstances.at(i).toLatin1();
         const QByteArray host = ctx->discoveredSrvHosts.value(instance);
@@ -437,10 +440,32 @@ void publishDiscoveredDevices(ShareCtx *ctx)
         row["name"] = deviceName;
         row["address"] = QString::fromLatin1(ipText);
         row["port"] = port;
-        rows.append(row);
-        signature.append(instance).append('|').append(deviceName.toUtf8())
-                 .append('|').append(ipText).append('|')
-                 .append(QByteArray::number(port)).append('\n');
+        // A restarted desktop can leave the old service instance cached for
+        // its TTL while the new instance is already advertising. Do not show
+        // two identical PCs: retain the freshest instance for this name/IP.
+        const QByteArray identity = deviceName.toUtf8() + '\0' + ip;
+        const int existing = identityRows.value(identity, -1);
+        if (existing >= 0) {
+            const QByteArray previous = rowInstances.at(existing);
+            if (ctx->discoveredInstanceSeen.value(instance, 0) <=
+                ctx->discoveredInstanceSeen.value(previous, 0))
+                continue;
+            rows[existing] = row;
+            rowInstances[existing] = instance;
+        } else {
+            identityRows.insert(identity, rows.size());
+            rows.append(row);
+            rowInstances.append(instance);
+        }
+    }
+    QByteArray signature;
+    for (int i = 0; i < rows.size(); ++i) {
+        const QVariantMap row = rows.at(i).toMap();
+        const QByteArray instance = rowInstances.at(i);
+        signature.append(instance).append('|')
+                 .append(row.value("name").toString().toUtf8()).append('|')
+                 .append(row.value("address").toString().toUtf8()).append('|')
+                 .append(QByteArray::number(row.value("port").toInt())).append('\n');
     }
     if (signature == ctx->publishedDeviceSignature) return;
     ctx->publishedDeviceSignature = signature;
@@ -511,6 +536,7 @@ void parseDiscoveryPacket(ShareCtx *ctx, int udp,
             if (readDnsName(buf, size, &p, &target)) {
                 if (ttl == 0) {
                     ctx->discoveredInstanceExpiry.remove(target);
+                    ctx->discoveredInstanceSeen.remove(target);
                     ctx->discoveredSrvHosts.remove(target);
                     ctx->discoveredSrvPorts.remove(target);
                     ctx->discoveredSrvExpiry.remove(target);
@@ -519,6 +545,7 @@ void parseDiscoveryPacket(ShareCtx *ctx, int udp,
                 } else {
                     ctx->discoveredInstanceExpiry.insert(target,
                                                          recordExpiry(now, ttl));
+                    ctx->discoveredInstanceSeen.insert(target, now);
                 }
                 changed = true;
             }
@@ -566,8 +593,19 @@ void parseDiscoveryPacket(ShareCtx *ctx, int udp,
                 ctx->discoveredAddresses.remove(name);
                 ctx->discoveredAddressExpiry.remove(name);
             } else {
-                ctx->discoveredAddresses.insert(
-                    name, QByteArray((const char *)buf + rdata, 4));
+                const QByteArray candidate((const char *)buf + rdata, 4);
+                const QByteArray current = ctx->discoveredAddresses.value(name);
+                // A desktop can advertise the same mDNS host on Wi-Fi, USB,
+                // VPN and virtual bridges. Keep the address on the same /24
+                // as the interface used for this BB10 mDNS socket; blindly
+                // replacing it with the last A record caused Q10 -> PC sends
+                // to hit an unreachable interface and report ECONNREFUSED.
+                const bool candidateLocal = ctx->localIp &&
+                    memcmp(candidate.constData(), &ctx->localIp, 3) == 0;
+                const bool currentLocal = ctx->localIp && current.size() == 4 &&
+                    memcmp(current.constData(), &ctx->localIp, 3) == 0;
+                if (current.size() != 4 || (candidateLocal && !currentLocal))
+                    ctx->discoveredAddresses.insert(name, candidate);
                 ctx->discoveredAddressExpiry.insert(name, recordExpiry(now, ttl));
             }
             changed = true;
@@ -711,6 +749,18 @@ void sendAnnounce(ShareCtx *ctx, int udp)
                (struct sockaddr *)&peer, sizeof(peer));
         ++it;
     }
+}
+
+void sendGoodbye(ShareCtx *ctx, int udp)
+{
+    // RFC 6762 goodbye: publish the owned records with TTL zero so peers
+    // immediately discard this endpoint when the app is closed normally.
+    const QByteArray packet = buildResponse(
+        ctx, 0, true, true, dnsName(SERVICE_TYPE), true, true, true,
+        QByteArray(), 0);
+    sendMulticast(udp, packet);
+    usleep(100000);
+    sendMulticast(udp, packet);
 }
 
 void armAnnounceBurst(ShareCtx *ctx, qint64 now)
@@ -1019,6 +1069,20 @@ void *workerMain(void *arg)
             postStatus(ctx, QObject::tr("Segnale Quick Share BLE rilevato: annuncio Wi-Fi inviato"));
         }
         if (ctx->svc->takeScanRequest()) {
+            // Una nuova ricerca deve partire da una cache vuota. I resolver
+            // mDNS possono mantenere per il TTL una SRV con la porta di una
+            // precedente istanza del desktop; riutilizzarla porta a
+            // ECONNREFUSED anche se il servizio corrente e' gia' online.
+            ctx->discoveredInstanceExpiry.clear();
+            ctx->discoveredInstanceSeen.clear();
+            ctx->discoveredSrvHosts.clear();
+            ctx->discoveredSrvExpiry.clear();
+            ctx->discoveredTxts.clear();
+            ctx->discoveredTxtExpiry.clear();
+            ctx->discoveredAddresses.clear();
+            ctx->discoveredAddressExpiry.clear();
+            ctx->discoveredSrvPorts.clear();
+            publishDiscoveredDevices(ctx);
             ctx->scanActive = true;
             ctx->scanDeadlineMs = now + 5000;
             ctx->nextScanQueryMs = now + 1000;
@@ -1094,6 +1158,7 @@ void *workerMain(void *arg)
     if (ctx->bleWakeActive)
         bt_le_deinit();
 #endif
+    sendGoodbye(ctx, udp);
     close(udp);
     close(tcp);
     delete ctx;

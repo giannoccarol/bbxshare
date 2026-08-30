@@ -172,8 +172,9 @@ fresh-clone CI target. None of the prebuilt test executables or generated MOC
 sources is part of the public source set.
 
 The end-to-end test uses `BBXSHARE_DOWNLOAD_DIR` to redirect received files to
-a temporary directory. The application default is the BB10 shared downloads
-directory.
+a temporary directory. It also sends negative signed `int64` control and file
+payload IDs, matching the full ID range used by rQuickShare. The application
+default is the BB10 shared downloads directory.
 
 ## Provenance and third-party notices
 
